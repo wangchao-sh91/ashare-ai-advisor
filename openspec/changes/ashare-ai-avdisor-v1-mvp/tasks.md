@@ -1,10 +1,10 @@
 ## 1. Project Foundation
 
-- [ ] 1.1 Create the `apps/api` Python 3.12 package structure and configure FastAPI, LangChain, linting, type checking, and test dependencies
-- [ ] 1.2 Create the `apps/web` React + TypeScript + Vite project structure and configure linting, formatting, and frontend tests
-- [ ] 1.3 Add root-level developer commands for installing, running, checking, and testing both applications without introducing a database
-- [ ] 1.4 Add backend and frontend `.env.example` files with redacted provider, CORS, timeout, retry, cache, and local endpoint settings
-- [ ] 1.5 Add repository ignore rules and automated secret checks so local provider credentials and generated artifacts cannot be committed
+- [x] 1.1 Create the `apps/api` Python 3.12 package structure and configure FastAPI, LangChain, linting, type checking, and test dependencies
+- [x] 1.2 Create the `apps/web` React + TypeScript + Vite project structure and configure linting, formatting, and frontend tests
+- [x] 1.3 Add root-level developer commands for installing, running, checking, and testing both applications without introducing a database
+- [x] 1.4 Add backend and frontend `.env.example` files with redacted provider, CORS, timeout, retry, cache, and local endpoint settings
+- [x] 1.5 Add repository ignore rules and automated secret checks so local provider credentials and generated artifacts cannot be committed
 
 ## 2. Backend Domain and Configuration
 
