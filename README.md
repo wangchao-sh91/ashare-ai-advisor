@@ -40,6 +40,7 @@ Compose 网络中可访问。完整部署步骤见 [本地部署指南](docs/dep
 - `make check`：后端 lint/格式/Mypy、前端 lint/格式/TypeScript 和密钥扫描
 - `make test`：全部后端及前端测试
 - `make compose-integration`：无真实凭据的干净镜像、MCP 生命周期、代理流式和验收场景
+- `make smoke-doubao-search`：调用一次豆包搜索并打印规范化后的检索结果（至少允许等待 60 秒）
 - `make smoke-live`：明确选择后运行 AKShare、DeepSeek、豆包搜索真实冒烟检查
 - `make format`：格式化前后端代码
 - `make secrets`：扫描疑似密钥

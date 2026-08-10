@@ -5,7 +5,8 @@ API_VENV := $(API_DIR)/.venv
 API_PYTHON := $(API_VENV)/bin/python
 
 .PHONY: install install-api install-web dev dev-api dev-web check check-api check-web \
-	format test test-api test-web secrets pre-commit smoke-live compose-config compose-up \
+	format test test-api test-web secrets pre-commit smoke-llm smoke-doubao-search smoke-live \
+	compose-config compose-up \
 	compose-down compose-integration
 
 install: install-api install-web
@@ -57,6 +58,12 @@ secrets:
 
 pre-commit:
 	$(API_VENV)/bin/pre-commit install
+
+smoke-llm:
+	cd $(API_DIR) && .venv/bin/python scripts/llm_smoke.py
+
+smoke-doubao-search:
+	cd $(API_DIR) && .venv/bin/python scripts/doubao_search_smoke.py
 
 smoke-live:
 	cd $(API_DIR) && LIVE_PROVIDER_SMOKE=1 .venv/bin/python scripts/live_smoke.py
