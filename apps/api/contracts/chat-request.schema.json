@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "ChatMessage": {
+      "additionalProperties": false,
+      "description": "One compact prior message supplied by the browser.",
+      "properties": {
+        "content": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ChatRole"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "title": "ChatMessage",
+      "type": "object"
+    },
+    "ChatRole": {
+      "enum": [
+        "user",
+        "assistant"
+      ],
+      "title": "ChatRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A question plus bounded current-page context; never a server session.",
+  "properties": {
+    "messages": {
+      "items": {
+        "$ref": "#/$defs/ChatMessage"
+      },
+      "maxItems": 20,
+      "title": "Messages",
+      "type": "array"
+    },
+    "question": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Question",
+      "type": "string"
+    }
+  },
+  "required": [
+    "question"
+  ],
+  "title": "ChatRequest",
+  "type": "object"
+}

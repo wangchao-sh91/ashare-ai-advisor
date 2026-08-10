@@ -1,0 +1,873 @@
+{
+  "$defs": {
+    "AcceptedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "const": "accepted",
+          "default": "accepted",
+          "title": "Event",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "timestamp"
+      ],
+      "title": "AcceptedEvent",
+      "type": "object"
+    },
+    "AnswerCompleteEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/StructuredAnswer"
+        },
+        "event": {
+          "const": "answer-complete",
+          "default": "answer-complete",
+          "title": "Event",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "timestamp",
+        "answer"
+      ],
+      "title": "AnswerCompleteEvent",
+      "type": "object"
+    },
+    "AnswerDeltaEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "delta": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Delta",
+          "type": "string"
+        },
+        "event": {
+          "const": "answer-delta",
+          "default": "answer-delta",
+          "title": "Event",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "section": {
+          "$ref": "#/$defs/AnswerSection"
+        },
+        "sequence": {
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "timestamp",
+        "section",
+        "sequence",
+        "delta"
+      ],
+      "title": "AnswerDeltaEvent",
+      "type": "object"
+    },
+    "AnswerKind": {
+      "enum": [
+        "research",
+        "knowledge",
+        "mixed",
+        "clarification"
+      ],
+      "title": "AnswerKind",
+      "type": "string"
+    },
+    "AnswerSection": {
+      "enum": [
+        "summary",
+        "fact",
+        "analysis",
+        "risk",
+        "limitation",
+        "disclaimer"
+      ],
+      "title": "AnswerSection",
+      "type": "string"
+    },
+    "AnswerStartEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "answer_kind": {
+          "$ref": "#/$defs/AnswerKind"
+        },
+        "event": {
+          "const": "answer-start",
+          "default": "answer-start",
+          "title": "Event",
+          "type": "string"
+        },
+        "instrument": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Instrument"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "timestamp",
+        "answer_kind"
+      ],
+      "title": "AnswerStartEvent",
+      "type": "object"
+    },
+    "Citation": {
+      "additionalProperties": false,
+      "description": "User-visible attribution for a market or web claim.",
+      "properties": {
+        "domain": {
+          "anyOf": [
+            {
+              "maxLength": 253,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interface"
+        },
+        "published_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Published At"
+        },
+        "publisher": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publisher"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "snippet": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snippet"
+        },
+        "source_quality": {
+          "$ref": "#/$defs/SourceQuality",
+          "default": "primary"
+        },
+        "source_type": {
+          "$ref": "#/$defs/SourceType"
+        },
+        "supported_claim": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Supported Claim",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "maxLength": 2083,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "id",
+        "source_type",
+        "title",
+        "supported_claim",
+        "retrieved_at"
+      ],
+      "title": "Citation",
+      "type": "object"
+    },
+    "CitationEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "citation": {
+          "$ref": "#/$defs/Citation"
+        },
+        "event": {
+          "const": "citation",
+          "default": "citation",
+          "title": "Event",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "timestamp",
+        "citation"
+      ],
+      "title": "CitationEvent",
+      "type": "object"
+    },
+    "ErrorCode": {
+      "enum": [
+        "invalid_request",
+        "context_too_large",
+        "ambiguous_instrument",
+        "unsupported_scope",
+        "market_data_unavailable",
+        "search_unavailable",
+        "model_unavailable",
+        "provider_rate_limited",
+        "validation_failed",
+        "cancelled",
+        "internal_error"
+      ],
+      "title": "ErrorCode",
+      "type": "string"
+    },
+    "ErrorEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "event": {
+          "const": "error",
+          "default": "error",
+          "title": "Event",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "recoverable": {
+          "title": "Recoverable",
+          "type": "boolean"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "timestamp",
+        "code",
+        "message",
+        "recoverable"
+      ],
+      "title": "ErrorEvent",
+      "type": "object"
+    },
+    "EvidenceItem": {
+      "additionalProperties": false,
+      "description": "A fact or metric that can be referenced during answer generation.",
+      "properties": {
+        "claim": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Claim",
+          "type": "string"
+        },
+        "cutoff": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cutoff"
+        },
+        "formula": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Formula"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "instrument": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Instrument"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "period_end": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period End"
+        },
+        "period_start": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period Start"
+        },
+        "quality_flags": {
+          "items": {
+            "$ref": "#/$defs/QualityFlag"
+          },
+          "title": "Quality Flags",
+          "type": "array"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "maxLength": 50,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "claim",
+        "retrieved_at"
+      ],
+      "title": "EvidenceItem",
+      "type": "object"
+    },
+    "EvidenceKind": {
+      "enum": [
+        "market_fact",
+        "computed_metric",
+        "web_fact"
+      ],
+      "title": "EvidenceKind",
+      "type": "string"
+    },
+    "Exchange": {
+      "enum": [
+        "SSE",
+        "SZSE",
+        "BSE"
+      ],
+      "title": "Exchange",
+      "type": "string"
+    },
+    "Instrument": {
+      "additionalProperties": false,
+      "description": "Canonical identity for a supported stock or broad index.",
+      "properties": {
+        "code": {
+          "pattern": "^\\d{6}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "exchange": {
+          "$ref": "#/$defs/Exchange"
+        },
+        "instrument_type": {
+          "$ref": "#/$defs/InstrumentType"
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "code",
+        "exchange",
+        "instrument_type"
+      ],
+      "title": "Instrument",
+      "type": "object"
+    },
+    "InstrumentType": {
+      "enum": [
+        "stock",
+        "broad_index"
+      ],
+      "title": "InstrumentType",
+      "type": "string"
+    },
+    "Limitation": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_categories": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Affected Categories",
+          "type": "array"
+        },
+        "code": {
+          "$ref": "#/$defs/LimitationCode"
+        },
+        "message": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "recoverable": {
+          "default": true,
+          "title": "Recoverable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "Limitation",
+      "type": "object"
+    },
+    "LimitationCode": {
+      "enum": [
+        "data_unavailable",
+        "data_stale",
+        "partial_data",
+        "search_unverified",
+        "source_conflict",
+        "unsupported_category"
+      ],
+      "title": "LimitationCode",
+      "type": "string"
+    },
+    "QualityFlag": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/QualityFlagCode"
+        },
+        "detail": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "title": "QualityFlag",
+      "type": "object"
+    },
+    "QualityFlagCode": {
+      "enum": [
+        "stale",
+        "partial_coverage",
+        "insufficient_sample",
+        "unit_uncertain",
+        "source_conflict"
+      ],
+      "title": "QualityFlagCode",
+      "type": "string"
+    },
+    "SourceQuality": {
+      "enum": [
+        "primary",
+        "secondary"
+      ],
+      "title": "SourceQuality",
+      "type": "string"
+    },
+    "SourceType": {
+      "enum": [
+        "akshare",
+        "web"
+      ],
+      "title": "SourceType",
+      "type": "string"
+    },
+    "StatusEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "const": "status",
+          "default": "status",
+          "title": "Event",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/$defs/StatusStage"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "timestamp",
+        "stage",
+        "message"
+      ],
+      "title": "StatusEvent",
+      "type": "object"
+    },
+    "StatusStage": {
+      "enum": [
+        "routing",
+        "market_data",
+        "web_search",
+        "calculation",
+        "generation",
+        "verification"
+      ],
+      "title": "StatusStage",
+      "type": "string"
+    },
+    "StructuredAnswer": {
+      "additionalProperties": false,
+      "description": "Verified semantic answer returned by orchestration.",
+      "properties": {
+        "analysis": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Analysis",
+          "type": "array"
+        },
+        "answered_at": {
+          "format": "date-time",
+          "title": "Answered At",
+          "type": "string"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/Citation"
+          },
+          "maxItems": 100,
+          "title": "Citations",
+          "type": "array"
+        },
+        "data_cutoff": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Cutoff"
+        },
+        "disclaimer": {
+          "default": "本回答仅供研究参考，不构成任何投资建议。投资有风险，决策需谨慎。",
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Disclaimer",
+          "type": "string"
+        },
+        "facts": {
+          "items": {
+            "$ref": "#/$defs/EvidenceItem"
+          },
+          "maxItems": 100,
+          "title": "Facts",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/AnswerKind"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "maxItems": 50,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "risks": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Risks",
+          "type": "array"
+        },
+        "summary": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary",
+        "answered_at"
+      ],
+      "title": "StructuredAnswer",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "accepted": "#/$defs/AcceptedEvent",
+      "answer-complete": "#/$defs/AnswerCompleteEvent",
+      "answer-delta": "#/$defs/AnswerDeltaEvent",
+      "answer-start": "#/$defs/AnswerStartEvent",
+      "citation": "#/$defs/CitationEvent",
+      "error": "#/$defs/ErrorEvent",
+      "status": "#/$defs/StatusEvent"
+    },
+    "propertyName": "event"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/AcceptedEvent"
+    },
+    {
+      "$ref": "#/$defs/StatusEvent"
+    },
+    {
+      "$ref": "#/$defs/AnswerStartEvent"
+    },
+    {
+      "$ref": "#/$defs/AnswerDeltaEvent"
+    },
+    {
+      "$ref": "#/$defs/CitationEvent"
+    },
+    {
+      "$ref": "#/$defs/AnswerCompleteEvent"
+    },
+    {
+      "$ref": "#/$defs/ErrorEvent"
+    }
+  ]
+}
