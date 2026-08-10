@@ -1,2 +1,8 @@
-/** Ephemeral chat state and workspace composition live in this module boundary. */
-export {};
+export { ChatWorkspace } from "./ChatWorkspace";
+export {
+  chatReducer,
+  initialChatState,
+  type ChatPhase,
+  type ChatState,
+} from "./state";
+export { useChat } from "./useChat";

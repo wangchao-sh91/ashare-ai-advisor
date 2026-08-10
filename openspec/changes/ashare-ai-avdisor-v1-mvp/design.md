@@ -13,7 +13,7 @@ The product runs locally for one user through Docker Compose, has no identity sy
 - Stream progress and answer events to the browser while keeping conversation state ephemeral and browser-owned.
 - Make upstream failures produce explicit partial or unavailable results instead of unsupported model output.
 - Match the Penpot desktop information hierarchy and interaction states using reusable frontend components and tokens.
-- Keep external model and search protocols behind adapters so exact endpoints, model identifiers, and credentials remain configuration.
+- Keep external model and search protocols behind adapters so exact model endpoints, model identifiers, MCP transport details, and credentials do not leak into domain logic.
 - Provide a reproducible Docker Compose deployment that exposes one loopback-only browser entry point and verifies service health.
 
 **Non-Goals:**
@@ -120,7 +120,7 @@ validate request
   → stream completion
 ```
 
-Each stage produces typed domain data. Tool choice is constrained by intent: stable knowledge can go directly to generation; instrument research invokes approved market-data operations; time-sensitive claims invoke Doubao search; mixed questions can use both. The workflow limits tool count, timeout, retries, and total evidence volume.
+Each stage produces typed domain data. Tool choice is constrained by intent: stable knowledge can go directly to generation; instrument research invokes approved market-data operations; time-sensitive claims invoke Doubao search; mixed questions can use both. The workflow limits tool count, timeout, retries, and total evidence volume. MCP discovery is validated by application lifecycle code, but MCP tools are not dynamically bound to the model: the evidence planner selects the application-level `SearchGateway`, which alone may invoke the allowlisted `web_search` tool.
 
 Alternatives considered:
 
@@ -178,14 +178,21 @@ Citation
 
 The final typed answer contains `summary`, `facts`, `analysis`, `risks`, `citations`, `data_cutoff`, `disclaimer`, and `limitations`. Knowledge-only answers may omit research-only sections.
 
-### 8. Doubao search as an untrusted evidence provider
+### 8. Doubao search through the official MCP Server
 
-Wrap the Doubao search Tool behind a gateway accepting only a query, result limit, and freshness intent. Normalize title, URL, domain/publisher, snippet, publication date, and retrieval time. Apply a source-priority policy that favors regulators, exchanges, listed-company disclosures, government agencies, and index publishers.
+Implement the application-level `SearchGateway` as an MCP client for the official Doubao SearchInfinity MCP Server. For the single-worker MVP, the API process supervises one long-lived stdio MCP subprocess and owns its initialization and shutdown through the FastAPI lifespan. The API image installs the official server at build time from an audited, immutable revision; application startup never downloads or executes an unpinned remote package. A future multi-worker deployment may move the same server behind an internal Streamable HTTP sidecar without changing the domain gateway.
 
-Search pages and snippets are untrusted content. They are quoted as evidence only, never treated as instructions; prompt boundaries explicitly prevent retrieved text from changing tool policy or revealing configuration. URLs rendered by the frontend are validated as HTTP(S) and opened with safe external-link attributes. Conflicting credible evidence is preserved for disclosure rather than silently collapsed.
+At initialization, the client performs the MCP handshake and verifies that the server exposes the expected `web_search` tool. It does not forward the discovered tool collection to DeepSeek. The gateway accepts only a bounded query, result limit, freshness intent, and authority intent, then maps them to the provider contract: `Query`, `Count`, forced `SearchType=web`, optional `TimeRange`, and optional `AuthLevel`. Provider query-length and result-count limits are validated before the call. Timeouts, retries, cancellation, reconnect behavior, and secret-safe errors remain application-owned even though execution crosses the MCP boundary.
+
+Normalize `Title`, `Url`, `SiteName`, bounded `Snippet`/`Summary`, and `PublishTime` into provider-independent citations with an application-generated retrieval time. Treat provider `RankScore` as relevance metadata rather than source credibility. Do not send unbounded `Content` to the model. Validate every URL as HTTP(S), derive the domain independently, and apply an application source-priority policy that favors regulators, exchanges, listed-company disclosures, government agencies, and index publishers.
+
+Search pages, snippets, and summaries are untrusted content. They are quoted as evidence only, never treated as instructions; prompt boundaries explicitly prevent retrieved text from changing tool policy or revealing configuration. URLs rendered by the frontend are opened with safe external-link attributes. Conflicting credible evidence is preserved for disclosure rather than silently collapsed.
 
 Alternatives considered:
 
+- A Skill package is appropriate for a general Agent harness that implements Skill discovery and execution, but this application has a fixed FastAPI workflow and would need a second runtime abstraction only to reach the same search API.
+- Calling the search REST API directly would minimize process overhead but would duplicate the provider-maintained protocol adapter and diverge from the official MCP integration path selected for this change.
+- Running the MCP Server as a third Compose service would improve process isolation, but adds deployment and health-ordering complexity that is unnecessary for the single-worker MVP; Streamable HTTP remains the scale-out path.
 - General model browsing would reduce integration code but weakens provider control and citation normalization.
 - Treating snippets as authoritative facts is rejected because snippets can be truncated, stale, or misleading.
 
@@ -208,14 +215,14 @@ Alternatives considered:
 
 ### 11. Configuration, logging, and local security posture
 
-Use validated environment configuration for provider endpoints, credentials, model ID, CORS origins, timeouts, retries, cache TTL, and log level. For direct development, bind the API to loopback and allow only the configured local Vite origin. In Compose, the API listens on the container interface but is not published to the host; only the web entry point is bound to host loopback. Provide a redacted `.env.example`; never commit secrets.
+Use validated environment configuration for model endpoints, provider credentials, model ID, Doubao MCP authentication/transport, CORS origins, timeouts, retries, cache TTL, and log level. The application may retain a product-level Doubao API-key setting and map it only into the official subprocess environment name; it does not expose an arbitrary configurable command or retain the provisional HTTP base-URL assumption. For direct development, bind the API to loopback and allow only the configured local Vite origin. In Compose, the API listens on the container interface but is not published to the host; only the web entry point is bound to host loopback. Provide a redacted `.env.example`; never commit secrets.
 
-Structured logs include request correlation ID, stage, duration, provider, interface/operation, evidence counts, and typed error code. They exclude full conversation text, provider credentials, and raw search documents by default so logs do not become a hidden chat history. Add `/health` for process health and a separate readiness result that reports configuration presence without echoing secrets.
+Structured logs include request correlation ID, stage, duration, provider, interface/operation, evidence counts, and typed error code. They exclude full conversation text, provider credentials, MCP environment values, and raw search documents by default so logs do not become a hidden chat history. Add `/health` for process health and a separate readiness result that combines configuration presence with MCP initialization and required-tool availability without echoing secrets.
 
 ### 12. Testing strategy
 
 - Unit tests cover instrument normalization, date alignment, formulas, validation, routing policies, citation rules, and answer safety checks.
-- Provider contract tests use recorded sanitized fixtures and explicit schema assertions; live-provider smoke tests are opt-in because upstream availability is nondeterministic.
+- Provider contract tests use recorded sanitized MCP `CallToolResult` fixtures and explicit schema assertions; lifecycle tests use a fake MCP transport/server, and live-provider smoke tests are opt-in because upstream availability is nondeterministic.
 - Orchestrator tests replace model, AKShare, and search gateways with fakes to verify tool selection, partial failure, no-evidence refusal, and follow-up resolution.
 - FastAPI integration tests validate input limits, streaming event order, cancellation behavior, typed errors, CORS, and secret redaction.
 - Frontend tests cover initial/streaming/completed/error states, 500-character limit, clear/new behavior, citation rendering, and no browser persistence.
@@ -230,11 +237,11 @@ Use a root `compose.yaml` with two services:
 ```text
 browser → 127.0.0.1:<configured-port> → web (Nginx) → /api → api (FastAPI)
                                                         ├── AKShare upstreams
-                                                        ├── Doubao search
+                                                        ├── supervised stdio MCP subprocess → Doubao search
                                                         └── DeepSeek V4 Pro
 ```
 
-The API image uses a pinned Python 3.12 base and installs only runtime dependencies in its final stage. It runs as a non-root user with a health check against `/health`. The web image uses a Node build stage for the Vite application and a minimal Nginx runtime stage that serves static assets, supports SPA fallback, preserves streaming response behavior, and proxies `/api` to the internal API service.
+The API image uses a pinned Python 3.12 base and installs only runtime dependencies, including the official Doubao MCP Server at an audited immutable revision, in its final stage. The server runs as a child of the same non-root API user; no `uvx` or Git download occurs at container startup. The API container has a health check against `/health`, while readiness also reflects the MCP handshake and required-tool state. The web image uses a Node build stage for the Vite application and a minimal Nginx runtime stage that serves static assets, supports SPA fallback, preserves streaming response behavior, and proxies `/api` to the internal API service.
 
 Compose waits for API health before starting or marking the web service ready. Only the web service publishes a port, bound explicitly to `127.0.0.1`; the API remains reachable only on the Compose network. Provider credentials enter the API container through a local environment file or host environment and are never baked into images or passed to the web build. No persistent volumes are defined because conversations and the in-process market cache are intentionally ephemeral. Containers use restart policies appropriate for a local application and bounded health-check intervals.
 
@@ -250,6 +257,8 @@ Alternatives considered:
 - [Free public data can be stale, incomplete, or internally inconsistent] → Display actual cutoffs, carry quality flags, align dates explicitly, and omit unsupported metrics.
 - [DeepSeek V4 Pro product naming may not match a stable API model identifier] → Keep the exact identifier and base URL configurable and fail readiness checks when missing.
 - [Search results can contain misinformation or prompt injection] → Prefer primary sources, treat all retrieved text as untrusted evidence, normalize metadata, and verify citations.
+- [The official MCP Server is an early-version dependency whose contract or packaging can change] → Pin an audited immutable revision, validate tool discovery and result fixtures, and isolate all protocol mapping behind `SearchGateway`.
+- [The stdio MCP child can fail independently or complicate cancellation and shutdown] → Supervise it through application lifespan, bound every call, expose readiness separately from liveness, and convert transport failures into `search_unavailable`.
 - [Sending current context on every request increases payload and cloud exposure] → Bound and compact context, send only what is needed, disclose cloud processing, and never persist request content in application logs.
 - [In-process cache is lost at restart and does not coordinate multiple workers] → Accept cold starts and default to a single API worker for MVP; the cache is an optimization, not a correctness dependency.
 - [A stateless stream cannot be resumed after connection loss] → Show a retry action with the preserved local question; do not imply resumability.
@@ -262,7 +271,7 @@ Alternatives considered:
 ## Migration Plan
 
 1. Add backend and frontend scaffolds, container build files, Compose configuration, and redacted local configuration examples.
-2. Implement and test provider adapters, normalized evidence types, calculations, and controlled orchestration.
+2. Implement and test provider adapters, including the pinned official Doubao MCP client/subprocess boundary, normalized evidence types, calculations, and controlled orchestration.
 3. Implement the streaming API contract and Penpot-aligned frontend states.
 4. Run automated tests with fake/fixture providers, then opt-in live smoke tests with locally supplied credentials.
 5. Build clean images and verify startup, health checks, streaming, restart, and shutdown through Docker Compose with only the web port bound to loopback.
@@ -272,5 +281,5 @@ This is a greenfield deployment with no user data migration. Rollback consists o
 ## Open Questions
 
 - Confirm the provider's exact DeepSeek V4 Pro wire model identifier and base URL when credentials are configured.
-- Confirm the concrete Doubao search Tool protocol, authentication method, result fields, and quota before implementing its adapter.
+- Select and record the audited official Doubao MCP Server commit and verify the account quota plus live result-field behavior when credentials are available.
 - Finalize the initial approved AKShare interface/index allowlist through a fixture-backed compatibility spike during implementation.

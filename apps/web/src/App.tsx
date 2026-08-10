@@ -1,8 +1,11 @@
+import { AppShell } from "./components";
+import { ChatWorkspace, useChat } from "./features/chat";
+
 export function App() {
+  const chat = useChat();
   return (
-    <main>
-      <h1>A股 AI 投研助手</h1>
-      <p>项目基础已就绪，投研工作区将在后续任务中实现。</p>
-    </main>
+    <AppShell onNewChat={chat.reset}>
+      <ChatWorkspace chat={chat} />
+    </AppShell>
   );
 }

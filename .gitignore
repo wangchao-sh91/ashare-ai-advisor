@@ -1,6 +1,8 @@
 # Local environment and credentials
 .env
 .env.*
+.cred
+**/.cred
 !.env.example
 !**/.env.example
 

@@ -1,2 +1,2 @@
-/** Streaming client and wire contracts live in this module boundary. */
-export {};
+export * from "./wire";
+export * from "./stream";

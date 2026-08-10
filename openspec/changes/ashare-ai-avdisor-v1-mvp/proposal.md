@@ -6,7 +6,7 @@
 
 - 新增本地单用户投研问答应用，不包含注册、登录、权限或多租户能力。
 - 支持围绕单只 A 股和指定宽基指数进行自然语言问答，包括走势、量价、基本面、估值和公开风险信息。
-- 支持基础金融知识问答；遇到最新规则、近期事件或需要事实核验的问题时，允许 Agent 调用豆包搜索 Tool。
+- 支持基础金融知识问答；遇到最新规则、近期事件或需要事实核验的问题时，由受控编排通过官方豆包搜索 MCP Server 的 `web_search` 工具执行联网核验。
 - 使用 AKShare 获取公开金融数据，并由确定性程序执行指标计算、数据标准化和完整性检查，禁止模型臆造缺失数字。
 - 使用 DeepSeek V4 Pro 云端 API 和 LangChain 编排问题分类、工具调用、证据整合与回答生成。
 - 提供符合现有 Penpot UX 的 React 投研问答界面，展示当前对话、分析状态、结构化答案、引用、数据截止时间、错误状态和免责声明。
@@ -20,7 +20,7 @@
 
 - `research-question-answering`: 定义问题范围、意图路由、单股/宽基指数研究回答、金融知识回答及越界请求处理。
 - `market-data-grounding`: 定义 AKShare 数据获取、标的识别、确定性指标计算、数据质量检查、来源与时效追踪及降级行为。
-- `web-search-grounding`: 定义豆包搜索 Tool 的触发条件、结果筛选、权威来源优先、引用展示和搜索失败降级。
+- `web-search-grounding`: 定义豆包搜索 MCP 工具的受控触发、结果筛选、权威来源优先、引用展示和搜索失败降级。
 - `ephemeral-chat-workspace`: 定义符合 Penpot UX 的问答工作区、流式状态、结构化回答展示、当前上下文清理和无会话持久化行为。
 
 ### Modified Capabilities
@@ -29,8 +29,8 @@
 
 ## Impact
 
-- 新增 Python 3.12 + FastAPI 后端、LangChain Agent 编排层，以及 AKShare、豆包搜索 Tool 和 DeepSeek V4 Pro API 适配层。
+- 新增 Python 3.12 + FastAPI 后端、LangChain Agent 编排层，以及 AKShare、官方豆包搜索 MCP Server 和 DeepSeek V4 Pro API 适配层。
 - 新增 React + TypeScript + Vite 前端，并依据 Penpot 桌面端设计实现投研问答页面和交互状态。
 - 新增前后端容器镜像、Nginx 静态资源与反向代理配置、Docker Compose 服务编排和容器健康检查。
 - 新增前后端流式问答契约、结构化证据/引用模型、环境配置、错误处理、日志和必要的非会话型数据缓存。
-- 引入外部依赖与运行风险：AKShare 上游接口变化、豆包搜索配额或失败、DeepSeek API 限流/超时，以及外部数据与模型内容的合规边界。
+- 引入外部依赖与运行风险：AKShare 上游接口变化、豆包搜索配额或失败、官方 MCP Server 的协议/版本与子进程生命周期、DeepSeek API 限流/超时，以及外部数据与模型内容的合规边界。

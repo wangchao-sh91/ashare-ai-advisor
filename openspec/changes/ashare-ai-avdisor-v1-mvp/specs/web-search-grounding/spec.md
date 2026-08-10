@@ -1,6 +1,6 @@
 ## Purpose
 
-定义 Agent 何时使用豆包搜索 Tool，以及如何筛选、引用和降级联网信息，使具有时效性的金融回答可核验并避免把搜索摘要当作无来源事实。
+定义受控编排何时通过豆包搜索 MCP 工具执行联网核验，以及如何约束调用、筛选、引用和降级联网信息，使具有时效性的金融回答可核验并避免把搜索摘要当作无来源事实。
 
 ## ADDED Requirements
 
@@ -14,6 +14,21 @@ The system SHALL invoke web search when a question depends on recent events, cur
 #### Scenario: Stable foundational knowledge
 - **WHEN** the user asks for the definition of a stable financial concept without requesting current facts
 - **THEN** the system can answer without invoking web search
+
+### Requirement: Controlled MCP search invocation
+The system SHALL access Doubao search through the configured official MCP Server, SHALL invoke only the allowlisted `web_search` tool from an application-controlled evidence plan, and SHALL NOT expose arbitrary MCP tool discovery or execution to the model.
+
+#### Scenario: Bounded web search call
+- **WHEN** an approved evidence plan requires Doubao search
+- **THEN** the system maps the bounded query, result limit, web-only search type, and freshness intent to one allowlisted `web_search` MCP invocation
+
+#### Scenario: Unexpected MCP tool
+- **WHEN** MCP discovery returns a tool other than the allowlisted `web_search` tool
+- **THEN** the system does not expose or invoke that tool
+
+#### Scenario: MCP initialization unavailable
+- **WHEN** the configured MCP Server cannot start, initialize, or expose the required `web_search` tool
+- **THEN** readiness reports search as unavailable without exposing credentials and search-dependent requests follow the search-unavailable degradation behavior
 
 ### Requirement: Search source quality
 The system MUST prefer authoritative primary sources and MUST distinguish source publication time from retrieval time.
@@ -54,4 +69,3 @@ The system SHALL distinguish search unavailability from absence of evidence and 
 #### Scenario: No credible result found
 - **WHEN** search succeeds but returns no credible evidence for the requested current claim
 - **THEN** the system reports that it could not find sufficient reliable evidence and does not fabricate a citation
-

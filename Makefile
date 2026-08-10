@@ -5,7 +5,8 @@ API_VENV := $(API_DIR)/.venv
 API_PYTHON := $(API_VENV)/bin/python
 
 .PHONY: install install-api install-web dev dev-api dev-web check check-api check-web \
-	format test test-api test-web secrets pre-commit
+	format test test-api test-web secrets pre-commit smoke-live compose-config compose-up \
+	compose-down compose-integration
 
 install: install-api install-web
 
@@ -56,3 +57,18 @@ secrets:
 
 pre-commit:
 	$(API_VENV)/bin/pre-commit install
+
+smoke-live:
+	cd $(API_DIR) && LIVE_PROVIDER_SMOKE=1 .venv/bin/python scripts/live_smoke.py
+
+compose-config:
+	docker compose -f compose.yaml config
+
+compose-up:
+	docker compose -f compose.yaml up --build -d --wait
+
+compose-down:
+	docker compose -f compose.yaml down
+
+compose-integration:
+	bash scripts/compose-integration.sh
