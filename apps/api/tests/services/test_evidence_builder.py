@@ -27,7 +27,7 @@ def price(day: int, close: int, *, retrieved_offset: int = 0) -> NormalizedMarke
     return NormalizedMarketRecord(
         id=f"price:{day}",
         instrument=STOCK,
-        category=MarketDataCategory.PRICE,
+        category=MarketDataCategory.PRICE_DAILY,
         observed_at=observed_at,
         values={"close": close},
         units={"close": "CNY"},

@@ -1,16 +1,18 @@
-"""Structured model-assisted intent routing without model-selected tools."""
+"""One-call structured question normalization without model-selected tools."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from enum import StrEnum
-from typing import Protocol, TypeVar
+from typing import Protocol, Self, TypeVar
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.api.chat_models import ChatMessage
-from app.domain import MarketDataCategory
+from app.domain import EvidenceCategory, Instrument, InstrumentType
+from app.providers.model_gateway import ModelErrorCode, ModelGatewayError
 
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
 
@@ -23,28 +25,59 @@ class IntentKind(StrEnum):
     OUT_OF_SCOPE = "out_of_scope"
 
 
-class IntentClassification(BaseModel):
-    """Validated routing output; it is a hint to deterministic policy, not a tool call."""
-
+class QuestionNormalization(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    rewritten_question: str = Field(min_length=1, max_length=500)
     intent: IntentKind
-    instrument_query: str | None = Field(default=None, max_length=100)
-    requested_categories: list[MarketDataCategory] = Field(default_factory=list, max_length=6)
+    instrument: Instrument | None = None
+    requested_categories: list[EvidenceCategory] = Field(default_factory=list, max_length=7)
+    analysis_start: date | None = None
+    analysis_end: date | None = None
     time_sensitive: bool = False
+    clarification_required: bool = False
+    clarification_question: str | None = Field(default=None, max_length=500)
     comparison_requested: bool = False
     unsupported_reason: str | None = Field(default=None, max_length=300)
     rationale: str = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
-    def validate_scope_fields(self) -> IntentClassification:
-        if self.intent is IntentKind.OUT_OF_SCOPE and not self.unsupported_reason:
-            raise ValueError("out-of-scope classification requires unsupported_reason")
-        if self.intent is IntentKind.STABLE_KNOWLEDGE and self.requested_categories:
-            raise ValueError("stable knowledge cannot request market-data categories")
-        if len(self.requested_categories) != len(set(self.requested_categories)):
+    def validate_contract(self) -> Self:
+        categories = self.requested_categories
+        if len(categories) != len(set(categories)):
             raise ValueError("requested_categories must be unique")
+        if self.analysis_start and self.analysis_end and self.analysis_start > self.analysis_end:
+            raise ValueError("analysis_start must not be after analysis_end")
+        research = self.intent in {
+            IntentKind.SINGLE_STOCK,
+            IntentKind.BROAD_INDEX,
+            IntentKind.MIXED,
+        }
+        if research and self.instrument is None and not self.clarification_required:
+            raise ValueError("research intent requires a canonical instrument or clarification")
+        if self.clarification_required and not self.clarification_question:
+            raise ValueError("clarification requires a question")
+        if self.intent is IntentKind.STABLE_KNOWLEDGE and (self.instrument or categories):
+            raise ValueError("stable knowledge cannot require instrument evidence")
+        if self.intent is IntentKind.OUT_OF_SCOPE and not self.unsupported_reason:
+            raise ValueError("out-of-scope normalization requires unsupported_reason")
+        if self.instrument:
+            if self.instrument.instrument_type is InstrumentType.BROAD_INDEX and any(
+                category is not EvidenceCategory.INDEX_CONTEXT for category in categories
+            ):
+                raise ValueError("broad indexes are search-only")
+            if self.instrument.instrument_type is InstrumentType.STOCK and (
+                EvidenceCategory.INDEX_CONTEXT in categories
+            ):
+                raise ValueError("stock request cannot use index context category")
         return self
+
+    @property
+    def instrument_query(self) -> str | None:
+        return self.instrument.name if self.instrument else None
+
+
+IntentClassification = QuestionNormalization
 
 
 class StructuredModelGateway(Protocol):
@@ -55,37 +88,47 @@ class StructuredModelGateway(Protocol):
     ) -> StructuredT: ...
 
 
-_CLASSIFIER_SYSTEM_PROMPT = """You classify one Chinese A-share research question.
-Return only the requested structured schema. Choose exactly one intent:
-- single_stock: research about one mainland-listed A-share
-- broad_index: research about one approved broad-based mainland index
-- stable_knowledge: foundational knowledge requiring no current facts
-- mixed: a concept explanation plus research about one supported instrument
-- out_of_scope: multiple-instrument comparisons, funds, industries/concepts, bonds,
-  futures, Hong Kong/US stocks, portfolios, files, trading, or unsupported assets
-Extract only a concise instrument name/code explicitly present in the current question.
-Pronouns may leave instrument_query null; deterministic context resolution happens later.
-Mark time_sensitive for latest/current/recent events, rules, policies, or market facts.
-Requested categories may only be price, index_price, financial, valuation, ownership, pledge.
-Never propose, name, or invoke tools."""
+_NORMALIZER_SYSTEM_PROMPT = """Normalize one Chinese finance question into the exact schema.
+Rewrite it as a self-contained request using only bounded current-page context. Return a canonical
+instrument name, six-digit code, exchange, type, and therefore an unambiguous Tushare ts_code for
+one A-share stock. Supported broad indexes are search-only. Evidence categories are price_daily,
+financial, valuation, ownership, pledge, corporate_event, and index_context. A request combining
+daily prices with news or announcements must include price_daily and corporate_event with one
+shared analysis period. Stable knowledge uses no provider category. Multiple instruments and
+unsupported assets are out_of_scope. If identity is ambiguous or name/code/context conflict,
+request clarification and do not guess. Never name providers, URLs, SDK methods, or tools."""
 
 
-class IntentClassifier:
+class QuestionNormalizer:
     def __init__(self, model: StructuredModelGateway) -> None:
         self._model = model
 
-    async def classify(
+    async def normalize(
         self,
         question: str,
         context: Sequence[ChatMessage] = (),
-    ) -> IntentClassification:
+    ) -> QuestionNormalization:
         compact_context = "\n".join(
-            f"{message.role.value}: {message.content}" for message in context
+            f"{message.role.value}: {message.content}" for message in context[-8:]
         )
-        user_content = f"Current question:\n{question}"
+        content = f"Current question:\n{question}"
         if compact_context:
-            user_content += f"\n\nCurrent-page context (reference only):\n{compact_context}"
-        return await self._model.generate_structured(
-            [SystemMessage(content=_CLASSIFIER_SYSTEM_PROMPT), HumanMessage(content=user_content)],
-            IntentClassification,
-        )
+            content += f"\n\nCurrent-page context:\n{compact_context}"
+        try:
+            return await self._model.generate_structured(
+                [SystemMessage(content=_NORMALIZER_SYSTEM_PROMPT), HumanMessage(content=content)],
+                QuestionNormalization,
+            )
+        except ModelGatewayError as exc:
+            if exc.code is not ModelErrorCode.INVALID_STRUCTURED_OUTPUT:
+                raise
+            return QuestionNormalization(
+                rewritten_question=question,
+                intent=IntentKind.SINGLE_STOCK,
+                clarification_required=True,
+                clarification_question="问题解析结果不完整，请明确一个股票名称和代码及分析需求。",
+                rationale="结构化解析失败，未调用任何数据提供方",
+            )
+
+
+IntentClassifier = QuestionNormalizer

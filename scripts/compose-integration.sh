@@ -18,7 +18,6 @@ printf '%s\n' \
   "API_ENV_FILE=$verification_env" \
   "WEB_PORT=$web_port" \
   "PROVIDER_MODE=fake" >"$verification_env"
-printf 'DOUBAO_SEARCH_API_KEY=%s%s\n' 'integration-' 'placeholder' >>"$verification_env"
 
 compose=(
   docker compose
@@ -49,15 +48,14 @@ curl --fail --silent --show-error "$base_url/" >/dev/null
 "${compose[@]}" exec --no-TTY api python -c '
 import json, urllib.request
 payload = json.load(urllib.request.urlopen("http://127.0.0.1:8000/ready", timeout=3))
-assert payload == {"status": "ready", "missing": []}, payload
+assert payload == {
+    "status": "ready",
+    "missing": [],
+    "providers": {"tushare": "configured", "doubao_search": "usable"},
+}, payload
 '
 
-echo "[compose] verifying MCP child and reverse-proxied streaming"
-"${compose[@]}" exec --no-TTY api python -c '
-from pathlib import Path
-commands = [p.read_bytes().replace(b"\0", b" ") for p in Path("/proc").glob("[0-9]*/cmdline")]
-assert any(b"mcp-server-askecho-search-infinity" in command for command in commands), commands
-'
+echo "[compose] verifying reverse-proxied streaming"
 
 curl --no-buffer --fail --silent --show-error --max-time 30 \
   --header 'Content-Type: application/json' \
@@ -71,7 +69,6 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 grep -q 'event: accepted' "$stream_file"
-kill -0 "$stream_pid"
 wait "$stream_pid"
 stream_response="$(<"$stream_file")"
 grep -q 'event: accepted' <<<"$stream_response"
@@ -101,7 +98,7 @@ if test "$api_bindings" != "0"; then
   exit 1
 fi
 
-echo "[compose] verifying restart and graceful child shutdown"
+echo "[compose] verifying restart and graceful shutdown"
 "${compose[@]}" restart api
 "${compose[@]}" up --detach --wait --wait-timeout 180
 curl --fail --silent --show-error "$base_url/" >/dev/null

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Protocol, TypeVar, cast
 
 from anyio import fail_after, sleep
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from openai import APIError, APITimeoutError, RateLimitError
+from openai import APIError, APITimeoutError, BadRequestError, RateLimitError
 from pydantic import BaseModel, SecretStr, ValidationError
 
 StructuredT = TypeVar("StructuredT", bound=BaseModel, covariant=True)
@@ -111,23 +112,27 @@ class DeepSeekModelGateway:
             method="json_mode",
             include_raw=False,
         )
+        json_messages = _json_mode_messages(messages, schema)
         for attempt in range(self._max_retries + 1):
             code: ModelErrorCode
             cause: BaseException
             try:
                 with fail_after(self._timeout_seconds):
-                    result = await runnable.ainvoke(messages)
+                    result = await runnable.ainvoke(json_messages)
                 if not isinstance(result, schema):
                     result = schema.model_validate(result)
                 return result
             except (OutputParserException, ValidationError, ValueError, TypeError) as exc:
-                raise ModelGatewayError(ModelErrorCode.INVALID_STRUCTURED_OUTPUT) from exc
+                code = ModelErrorCode.INVALID_STRUCTURED_OUTPUT
+                cause = exc
             except (TimeoutError, APITimeoutError) as exc:
                 code = ModelErrorCode.TIMEOUT
                 cause = exc
             except RateLimitError as exc:
                 code = ModelErrorCode.RATE_LIMITED
                 cause = exc
+            except BadRequestError as exc:
+                raise ModelGatewayError(ModelErrorCode.UPSTREAM_ERROR) from exc
             except APIError as exc:
                 code = ModelErrorCode.UPSTREAM_ERROR
                 cause = exc
@@ -140,3 +145,21 @@ class DeepSeekModelGateway:
             await sleep(min(0.1 * (2**attempt), 1.0))
 
         raise AssertionError("unreachable")
+
+
+def _json_mode_messages(
+    messages: Sequence[BaseMessage],
+    schema: type[BaseModel],
+) -> list[BaseMessage]:
+    """Add the explicit JSON instruction required by DeepSeek JSON Output."""
+    serialized_schema = json.dumps(
+        schema.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    instruction = (
+        "Return only one valid json object that matches the following JSON Schema exactly. "
+        "Do not add markdown fences or explanatory text.\n"
+        f"JSON Schema:\n{serialized_schema}"
+    )
+    return [SystemMessage(content=instruction), *messages]

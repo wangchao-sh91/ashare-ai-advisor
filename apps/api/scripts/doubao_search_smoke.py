@@ -1,43 +1,42 @@
-"""Call Doubao Search once and print the normalized results."""
+"""Opt-in, secret-safe Doubao Search Custom API smoke check."""
 
 from __future__ import annotations
 
 import asyncio
-import json
+import os
 import sys
 
 from app.core.settings import Settings
-from app.providers.doubao_mcp import DoubaoMcpRuntime, McpRuntimeError, StdioDoubaoConnector
+from app.domain import EvidenceCategory
 from app.providers.search_gateway import DoubaoSearchGateway, SearchGatewayError, SearchRequest
-
-SMOKE_TIMEOUT_SECONDS = 60
 
 
 async def main() -> None:
+    if os.getenv("LIVE_PROVIDER_SMOKE") != "1":
+        print("SKIP Doubao Search: set LIVE_PROVIDER_SMOKE=1 to opt in")
+        return
     settings = Settings()
-    if not settings.doubao_search_auth_configured():
-        raise SystemExit("Doubao Search credentials are not configured")
-
-    runtime = DoubaoMcpRuntime(
-        connector=StdioDoubaoConnector(settings.doubao_search_child_env()),
-        timeout_seconds=max(settings.doubao_search_timeout_seconds, SMOKE_TIMEOUT_SECONDS),
-        max_retries=0,
-    )
+    gateway = DoubaoSearchGateway.from_settings(settings)
     try:
-        results = await DoubaoSearchGateway(runtime).search(
-            SearchRequest(query="上海证券交易所 最新公告", result_limit=3)
+        results = await gateway.search(
+            SearchRequest(
+                query="沪深300 指数 最新情况",
+                category=EvidenceCategory.INDEX_CONTEXT,
+                result_limit=1,
+            )
         )
     finally:
-        await runtime.stop()
-
-    output = [result.model_dump(mode="json") for result in results]
-    print(json.dumps(output, ensure_ascii=False, indent=2))
+        await gateway.aclose()
+    if not results:
+        print("Doubao Search smoke failed: no citable result", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"PASS Doubao Search: received {len(results)} normalized result(s)")
 
 
 def run() -> None:
     try:
         asyncio.run(main())
-    except (McpRuntimeError, SearchGatewayError) as exc:
+    except SearchGatewayError as exc:
         print(f"Doubao Search smoke failed: {exc.code.value}", file=sys.stderr)
         raise SystemExit(1) from None
 

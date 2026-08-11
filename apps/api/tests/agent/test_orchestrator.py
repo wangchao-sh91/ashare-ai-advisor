@@ -1,361 +1,351 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
-import pandas as pd
 import pytest
 from pydantic import HttpUrl
 
-from app.agent.entity_resolution import ContextualEntityResolver
 from app.agent.execution import ConstrainedToolExecutor, ToolExecutionResult
-from app.agent.orchestrator import ControlledOrchestrator, OrchestrationStatus
-from app.agent.planning import EvidencePlanner, MarketCallPlan
-from app.agent.routing import IntentClassification, IntentKind
-from app.api.chat_models import ChatMessage, ChatRequest, ChatRole
+from app.agent.orchestrator import (
+    ControlledOrchestrator,
+    OrchestrationResult,
+    OrchestrationStatus,
+)
+from app.agent.planning import EvidencePlanner
+from app.agent.routing import IntentKind, QuestionNormalization
+from app.api.chat_models import ChatRequest
 from app.domain import (
+    INVESTMENT_DISCLAIMER,
     AnswerKind,
+    CategoryOutcome,
+    CategoryStatus,
     Citation,
-    ErrorCode,
+    EvidenceCategory,
     EvidenceItem,
     EvidenceKind,
-    MarketDataCategory,
+    Exchange,
+    Instrument,
+    InstrumentType,
+    InsufficiencyReason,
+    NormalizedMarketRecord,
+    ProviderKind,
     SourceType,
     StructuredAnswer,
 )
-from app.providers.akshare_allowlist import MarketOperation
-from app.providers.model_gateway import ModelErrorCode, ModelGatewayError
-from app.providers.search_gateway import SearchRequest, SearchResult
-from app.services.evidence_aggregation import CategoryOutcome, CategoryStatus
-from app.services.instrument_resolver import InstrumentResolver
+from app.providers.search_gateway import SearchRequest
 
 NOW = datetime(2026, 8, 7, tzinfo=UTC)
+STOCK = Instrument(
+    name="贵州茅台",
+    code="600519",
+    exchange=Exchange.SSE,
+    instrument_type=InstrumentType.STOCK,
+)
+INDEX = Instrument(
+    name="沪深300",
+    code="000300",
+    exchange=Exchange.SSE,
+    instrument_type=InstrumentType.BROAD_INDEX,
+)
 
 
-class FakeClassifier:
-    def __init__(self, result: IntentClassification) -> None:
+class StubNormalizer:
+    def __init__(self, result: QuestionNormalization) -> None:
         self.result = result
+        self.calls = 0
 
-    async def classify(self, question: str, context: list[ChatMessage]) -> IntentClassification:
+    async def normalize(self, question: str, context: object) -> QuestionNormalization:
+        del question, context
+        self.calls += 1
         return self.result
 
 
-class FakeMarket:
-    def __init__(self, failed: set[MarketDataCategory] | None = None) -> None:
-        self.failed = failed or set()
-        self.operations: list[MarketOperation] = []
+class StubProvider:
+    def __init__(self, outcomes: dict[EvidenceCategory, CategoryOutcome]) -> None:
+        self.outcomes = outcomes
+        self.calls: list[EvidenceCategory] = []
 
-    async def execute(self, call: MarketCallPlan, instrument: object) -> CategoryOutcome:
-        self.operations.append(call.operation)
-        if call.category in self.failed:
-            return CategoryOutcome(
-                category=call.category,
-                status=CategoryStatus.UNAVAILABLE,
-                detail="category unavailable",
-            )
-        return CategoryOutcome(
-            category=call.category,
-            status=CategoryStatus.AVAILABLE,
-            evidence=[
-                EvidenceItem(
-                    id=f"evidence:{call.category.value}",
-                    kind=EvidenceKind.MARKET_FACT,
-                    claim=f"validated {call.category.value} fact",
-                    source_ids=[f"source:{call.category.value}"],
-                    retrieved_at=NOW,
-                )
-            ],
-        )
+    async def outcome(
+        self, request: SearchRequest | None = None, **kwargs: object
+    ) -> CategoryOutcome:
+        del kwargs
+        category = request.category if request is not None else EvidenceCategory.PRICE_DAILY
+        self.calls.append(category)
+        return self.outcomes[category]
 
 
-class FakeSearch:
-    def __init__(self, results: list[SearchResult] | None = None) -> None:
-        self.results = results or []
-        self.requests: list[SearchRequest] = []
-
-    async def search(self, request: SearchRequest) -> list[SearchResult]:
-        self.requests.append(request)
-        return self.results
-
-
-class FailingSearch:
-    async def search(self, request: SearchRequest) -> list[SearchResult]:
-        del request
-        raise TimeoutError("fake search timeout")
-
-
-class FakeGenerator:
+class StubGenerator:
     async def generate(
         self,
         question: str,
-        classification: IntentClassification,
+        normalization: QuestionNormalization,
         execution: ToolExecutionResult,
     ) -> StructuredAnswer:
-        facts = execution.evidence
-        citations = execution.citations
-        kind = {
-            IntentKind.STABLE_KNOWLEDGE: AnswerKind.KNOWLEDGE,
-            IntentKind.MIXED: AnswerKind.MIXED,
-        }.get(classification.intent, AnswerKind.RESEARCH)
+        del question
+        kind = (
+            AnswerKind.KNOWLEDGE
+            if normalization.intent is IntentKind.STABLE_KNOWLEDGE
+            else AnswerKind.MIXED
+            if normalization.intent is IntentKind.MIXED
+            else AnswerKind.RESEARCH
+        )
         return StructuredAnswer(
             kind=kind,
-            summary="基于已验证信息的结论",
-            facts=facts,
-            analysis=["解释与事实分开展示"],
-            risks=["结论存在不确定性"],
-            citations=citations,
+            summary="基于已验证证据形成结论。",
+            facts=execution.evidence,
+            analysis=["仅解释已验证事实，不补充未经证实的数据。"],
+            risks=[] if kind is AnswerKind.KNOWLEDGE else ["市场存在不确定性。"],
+            citations=execution.citations,
             answered_at=NOW,
+            disclaimer=INVESTMENT_DISCLAIMER,
             limitations=execution.limitations,
         )
 
 
-class FailingGenerator:
-    async def generate(
-        self,
-        question: str,
-        classification: IntentClassification,
-        execution: ToolExecutionResult,
-    ) -> StructuredAnswer:
-        del question, classification, execution
-        raise ModelGatewayError(ModelErrorCode.TIMEOUT)
-
-
-def classification(
-    intent: IntentKind,
-    *,
-    instrument: str | None = None,
-    categories: list[MarketDataCategory] | None = None,
-    current: bool = False,
-    comparison: bool = False,
-) -> IntentClassification:
-    return IntentClassification(
-        intent=intent,
-        instrument_query=instrument,
-        requested_categories=categories or [],
-        time_sensitive=current,
-        comparison_requested=comparison,
-        unsupported_reason="unsupported" if intent is IntentKind.OUT_OF_SCOPE else None,
-        rationale="test route",
-    )
-
-
-def search_result(identifier: str, url: str, claim: str) -> SearchResult:
-    return SearchResult(
-        citation=Citation(
-            id=identifier,
+def success(category: EvidenceCategory, provider: ProviderKind) -> CategoryOutcome:
+    citation = None
+    if provider is ProviderKind.DOUBAO_SEARCH:
+        citation = Citation(
+            id=f"web:{category.value}",
             source_type=SourceType.WEB,
-            title=identifier,
-            supported_claim=claim,
-            url=HttpUrl(url),
+            title="权威资料",
+            supported_claim="公开事实",
+            category=category,
+            url=HttpUrl(f"https://example.com/{category.value}"),
+            published_at=(
+                datetime(2026, 8, 1, 10, tzinfo=UTC)
+                if category is EvidenceCategory.CORPORATE_EVENT
+                else None
+            ),
             retrieved_at=NOW,
-        ),
-        snippet=claim,
-    )
-
-
-def orchestrator(
-    route: IntentClassification,
-    *,
-    market: FakeMarket | None = None,
-    search: FakeSearch | FailingSearch | None = None,
-    generator: FakeGenerator | FailingGenerator | None = None,
-) -> ControlledOrchestrator:
-    resolver = InstrumentResolver(
-        pd.DataFrame(
-            [
-                {"code": "600519", "name": "贵州茅台"},
-                {"code": "000001", "name": "平安银行"},
-            ]
         )
+    evidence = EvidenceItem(
+        id=f"evidence:{category.value}",
+        kind=(
+            EvidenceKind.MARKET_FACT if provider is ProviderKind.TUSHARE else EvidenceKind.WEB_FACT
+        ),
+        category=category,
+        claim=f"{category.value} fact",
+        instrument=STOCK if category is not EvidenceCategory.INDEX_CONTEXT else INDEX,
+        source_ids=[citation.id if citation else "daily:1"],
+        retrieved_at=NOW,
     )
-    return ControlledOrchestrator(
-        classifier=FakeClassifier(route),  # type: ignore[arg-type]
-        entity_resolver=ContextualEntityResolver(resolver),
-        planner=EvidencePlanner(),
-        executor=ConstrainedToolExecutor(market_tool=market, search_tool=search),
-        generator=generator or FakeGenerator(),  # type: ignore[arg-type]
+    records = []
+    if provider is ProviderKind.TUSHARE:
+        trading_dates = [
+            date(2026, 8, 1),
+            date(2026, 8, 2),
+            date(2026, 8, 3),
+            date(2026, 8, 4),
+            date(2026, 8, 5),
+            date(2026, 8, 6),
+            date(2026, 8, 7),
+        ]
+        records = [
+            NormalizedMarketRecord(
+                id=f"daily:{observed.isoformat()}",
+                instrument=STOCK,
+                observed_at=observed,
+                values={"close": Decimal(100 + index), "volume": 1000 + index * 10},
+                units={"close": "CNY", "volume": "shares"},
+                cutoff=NOW,
+                retrieved_at=NOW,
+            )
+            for index, observed in enumerate(trading_dates)
+        ]
+    return CategoryOutcome(
+        category=category,
+        provider=provider,
+        status=CategoryStatus.SUFFICIENT,
+        evidence=[evidence],
+        citations=[citation] if citation else [],
+        records=records,
     )
+
+
+def failure(category: EvidenceCategory, provider: ProviderKind) -> CategoryOutcome:
+    return CategoryOutcome(
+        category=category,
+        provider=provider,
+        status=CategoryStatus.UNAVAILABLE,
+        reason=InsufficiencyReason.PROVIDER_UNAVAILABLE,
+        detail=f"{category.value} unavailable",
+    )
+
+
+def normalization(
+    categories: list[EvidenceCategory],
+    *,
+    instrument: Instrument = STOCK,
+    intent: IntentKind = IntentKind.SINGLE_STOCK,
+) -> QuestionNormalization:
+    return QuestionNormalization(
+        rewritten_question="规范后的研究问题",
+        intent=intent,
+        instrument=instrument,
+        requested_categories=categories,
+        analysis_start=date(2026, 8, 1),
+        analysis_end=date(2026, 8, 7),
+        time_sensitive=any(item is not EvidenceCategory.PRICE_DAILY for item in categories),
+        rationale="test",
+    )
+
+
+async def run(
+    normalized: QuestionNormalization,
+    price_outcome: CategoryOutcome | None,
+    search_outcomes: dict[EvidenceCategory, CategoryOutcome],
+) -> tuple[OrchestrationResult, StubProvider, StubProvider]:
+    price = StubProvider(
+        {EvidenceCategory.PRICE_DAILY: price_outcome} if price_outcome is not None else {}
+    )
+    search = StubProvider(search_outcomes)
+    orchestrator = ControlledOrchestrator(
+        normalizer=StubNormalizer(normalized),  # type: ignore[arg-type]
+        planner=EvidencePlanner(today=date(2026, 8, 10)),
+        executor=ConstrainedToolExecutor(
+            price_provider=price if price_outcome is not None else None,
+            search_provider=search if search_outcomes else None,
+        ),
+        generator=StubGenerator(),  # type: ignore[arg-type]
+    )
+    result = await orchestrator.run(ChatRequest(question="原始问题"))
+    return result, price, search
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("route", "question", "operation", "kind"),
+    ("categories", "price_ok", "search_ok", "answered", "complete"),
     [
+        ([EvidenceCategory.PRICE_DAILY], True, [], True, True),
         (
-            classification(IntentKind.SINGLE_STOCK, instrument="贵州茅台"),
-            "分析贵州茅台走势",
-            MarketOperation.STOCK_HISTORY,
-            AnswerKind.RESEARCH,
+            [EvidenceCategory.PRICE_DAILY, EvidenceCategory.VALUATION],
+            True,
+            [EvidenceCategory.VALUATION],
+            True,
+            True,
         ),
+        ([EvidenceCategory.PRICE_DAILY, EvidenceCategory.VALUATION], True, [], True, False),
         (
-            classification(IntentKind.BROAD_INDEX, instrument="沪深300"),
-            "分析沪深300走势",
-            MarketOperation.INDEX_HISTORY,
-            AnswerKind.RESEARCH,
+            [EvidenceCategory.PRICE_DAILY, EvidenceCategory.VALUATION],
+            False,
+            [EvidenceCategory.VALUATION],
+            True,
+            False,
         ),
-        (
-            classification(IntentKind.MIXED, instrument="贵州茅台"),
-            "解释趋势并分析贵州茅台",
-            MarketOperation.STOCK_HISTORY,
-            AnswerKind.MIXED,
-        ),
+        ([EvidenceCategory.PRICE_DAILY, EvidenceCategory.VALUATION], False, [], False, False),
     ],
 )
-async def test_all_research_routes_select_expected_tool(
-    route: IntentClassification,
-    question: str,
-    operation: MarketOperation,
-    kind: AnswerKind,
+async def test_price_partial_and_all_failure_flows(
+    categories: list[EvidenceCategory],
+    price_ok: bool,
+    search_ok: list[EvidenceCategory],
+    answered: bool,
+    complete: bool,
 ) -> None:
-    market = FakeMarket()
-    result = await orchestrator(route, market=market).run(ChatRequest(question=question))
-    assert result.status is OrchestrationStatus.ANSWERED
-    assert result.answer is not None and result.answer.kind is kind
-    assert market.operations == [operation]
-
-
-@pytest.mark.asyncio
-async def test_stable_knowledge_route_uses_no_tools() -> None:
-    market = FakeMarket()
-    search = FakeSearch()
-    result = await orchestrator(
-        classification(IntentKind.STABLE_KNOWLEDGE), market=market, search=search
-    ).run(ChatRequest(question="什么是市盈率？"))
-    assert result.answer is not None and result.answer.kind is AnswerKind.KNOWLEDGE
-    assert market.operations == [] and search.requests == []
-
-
-@pytest.mark.asyncio
-async def test_current_question_uses_search_grounding_with_market_evidence() -> None:
-    market = FakeMarket()
-    search = FakeSearch(
-        [search_result("web:announcement", "https://example.com/notice", "latest notice")]
+    price_result = (
+        success(EvidenceCategory.PRICE_DAILY, ProviderKind.TUSHARE)
+        if price_ok
+        else failure(EvidenceCategory.PRICE_DAILY, ProviderKind.TUSHARE)
     )
-    result = await orchestrator(
-        classification(
-            IntentKind.SINGLE_STOCK,
-            instrument="贵州茅台",
-            current=True,
-        ),
-        market=market,
-        search=search,
-    ).run(ChatRequest(question="贵州茅台最近有什么公告？"))
-
-    assert result.status is OrchestrationStatus.ANSWERED
-    assert result.answer is not None
-    assert [citation.id for citation in result.answer.citations] == ["web:announcement"]
-    assert len(search.requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_follow_up_resolution_and_explicit_override() -> None:
-    result = await orchestrator(
-        classification(IntentKind.SINGLE_STOCK, instrument="平安银行"), market=FakeMarket()
-    ).run(
-        ChatRequest(
-            question="改看平安银行的估值",
-            messages=[ChatMessage(role=ChatRole.USER, content="之前分析贵州茅台")],
+    searches: dict[EvidenceCategory, CategoryOutcome] = {
+        category: (
+            success(category, ProviderKind.DOUBAO_SEARCH)
+            if category in search_ok
+            else failure(category, ProviderKind.DOUBAO_SEARCH)
         )
-    )
-    assert result.entity is not None and result.entity.instrument is not None
-    assert result.entity.instrument.name == "平安银行"
+        for category in categories
+        if category is not EvidenceCategory.PRICE_DAILY
+    }
+    result, _, _ = await run(normalization(categories), price_result, searches)
+    assert (result.status is OrchestrationStatus.ANSWERED) is answered
+    if result.execution:
+        assert result.execution.complete is complete
 
 
 @pytest.mark.asyncio
-async def test_pronoun_follow_up_resolves_from_current_page_context() -> None:
-    result = await orchestrator(classification(IntentKind.SINGLE_STOCK), market=FakeMarket()).run(
-        ChatRequest(
-            question="它的估值呢？",
-            messages=[
-                ChatMessage(role=ChatRole.USER, content="分析贵州茅台近期走势"),
-                ChatMessage(role=ChatRole.ASSISTANT, content="贵州茅台走势分析摘要"),
-            ],
-        )
+async def test_search_only_index_and_mixed_knowledge_route() -> None:
+    index_norm = normalization(
+        [EvidenceCategory.INDEX_CONTEXT],
+        instrument=INDEX,
+        intent=IntentKind.BROAD_INDEX,
+    )
+    result, price, search = await run(
+        index_norm,
+        None,
+        {
+            EvidenceCategory.INDEX_CONTEXT: success(
+                EvidenceCategory.INDEX_CONTEXT, ProviderKind.DOUBAO_SEARCH
+            )
+        },
     )
     assert result.status is OrchestrationStatus.ANSWERED
-    assert result.entity is not None and result.entity.instrument is not None
-    assert result.entity.instrument.name == "贵州茅台"
+    assert price.calls == []
+    assert search.calls == [EvidenceCategory.INDEX_CONTEXT]
 
-
-@pytest.mark.asyncio
-async def test_partial_failure_and_conflicting_search_sources_are_preserved() -> None:
-    market = FakeMarket(failed={MarketDataCategory.VALUATION})
-    search = FakeSearch(
-        [
-            search_result("web:one", "https://one.example/a", "source one says A"),
-            search_result("web:two", "https://two.example/a", "source two says B"),
-        ]
+    mixed = normalization(
+        [EvidenceCategory.PRICE_DAILY],
+        intent=IntentKind.MIXED,
     )
-    result = await orchestrator(
-        classification(
-            IntentKind.SINGLE_STOCK,
-            instrument="贵州茅台",
-            categories=[MarketDataCategory.PRICE, MarketDataCategory.VALUATION],
-            current=True,
-        ),
-        market=market,
-        search=search,
-    ).run(ChatRequest(question="贵州茅台最新走势和估值"))
+    mixed_result, _, _ = await run(
+        mixed,
+        success(EvidenceCategory.PRICE_DAILY, ProviderKind.TUSHARE),
+        {},
+    )
+    assert mixed_result.answer and mixed_result.answer.kind is AnswerKind.MIXED
+
+
+@pytest.mark.asyncio
+async def test_search_quota_failure_preserves_price_as_partial_answer() -> None:
+    quota = CategoryOutcome(
+        category=EvidenceCategory.CORPORATE_EVENT,
+        provider=ProviderKind.DOUBAO_SEARCH,
+        status=CategoryStatus.UNAVAILABLE,
+        reason=InsufficiencyReason.QUOTA_EXHAUSTED,
+        detail="search quota unavailable",
+    )
+    result, _, _ = await run(
+        normalization([EvidenceCategory.PRICE_DAILY, EvidenceCategory.CORPORATE_EVENT]),
+        success(EvidenceCategory.PRICE_DAILY, ProviderKind.TUSHARE),
+        {EvidenceCategory.CORPORATE_EVENT: quota},
+    )
     assert result.status is OrchestrationStatus.ANSWERED
-    assert result.answer is not None
-    assert len(result.answer.citations) == 2
-    assert result.answer.limitations
+    assert result.execution and not result.execution.complete
+    assert result.answer and result.answer.limitations[0].code.value == "quota_exhausted"
 
 
 @pytest.mark.asyncio
-async def test_unsupported_scope_is_refused_before_tools() -> None:
-    market = FakeMarket()
-    result = await orchestrator(
-        classification(IntentKind.OUT_OF_SCOPE, comparison=True), market=market
-    ).run(ChatRequest(question="比较贵州茅台和五粮液"))
-    assert result.status is OrchestrationStatus.REFUSED
-    assert result.error_code is ErrorCode.UNSUPPORTED_SCOPE
-    assert market.operations == []
+async def test_combined_daily_and_event_success_adds_deterministic_windows() -> None:
+    result, _, _ = await run(
+        normalization([EvidenceCategory.PRICE_DAILY, EvidenceCategory.CORPORATE_EVENT]),
+        success(EvidenceCategory.PRICE_DAILY, ProviderKind.TUSHARE),
+        {
+            EvidenceCategory.CORPORATE_EVENT: success(
+                EvidenceCategory.CORPORATE_EVENT,
+                ProviderKind.DOUBAO_SEARCH,
+            )
+        },
+    )
+    assert result.status is OrchestrationStatus.ANSWERED
+    assert result.execution
+    windows = [
+        item for item in result.execution.evidence if item.id.startswith("metric:event_window")
+    ]
+    assert [item.period_end for item in windows] == [
+        date(2026, 8, 2),
+        date(2026, 8, 4),
+        date(2026, 8, 6),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_instrument_requests_clarification() -> None:
-    result = await orchestrator(
-        classification(IntentKind.SINGLE_STOCK, instrument="000001"), market=FakeMarket()
-    ).run(ChatRequest(question="分析000001"))
+async def test_clarification_stops_before_providers() -> None:
+    normalized = QuestionNormalization(
+        rewritten_question="分析000001",
+        intent=IntentKind.SINGLE_STOCK,
+        clarification_required=True,
+        clarification_question="请明确股票或指数。",
+        rationale="ambiguous",
+    )
+    result, price, search = await run(normalized, None, {})
     assert result.status is OrchestrationStatus.CLARIFICATION_REQUIRED
-    assert result.error_code is ErrorCode.AMBIGUOUS_INSTRUMENT
-
-
-@pytest.mark.asyncio
-async def test_no_evidence_refuses_generation() -> None:
-    result = await orchestrator(
-        classification(IntentKind.SINGLE_STOCK, instrument="贵州茅台"),
-        market=FakeMarket(failed={MarketDataCategory.PRICE}),
-    ).run(ChatRequest(question="分析贵州茅台走势"))
-    assert result.status is OrchestrationStatus.FAILED
-    assert result.error_code is ErrorCode.MARKET_DATA_UNAVAILABLE
-    assert result.answer is None
-
-
-@pytest.mark.asyncio
-async def test_search_failure_preserves_market_answer_with_explicit_limitation() -> None:
-    result = await orchestrator(
-        classification(
-            IntentKind.SINGLE_STOCK,
-            instrument="贵州茅台",
-            current=True,
-        ),
-        market=FakeMarket(),
-        search=FailingSearch(),
-    ).run(ChatRequest(question="贵州茅台最近有什么变化？"))
-
-    assert result.status is OrchestrationStatus.ANSWERED
-    assert result.answer is not None
-    assert result.execution is not None and not result.execution.current_claim_verified
-    assert any(item.code.value == "search_unverified" for item in result.answer.limitations)
-
-
-@pytest.mark.asyncio
-async def test_model_failure_returns_typed_terminal_outcome() -> None:
-    result = await orchestrator(
-        classification(IntentKind.SINGLE_STOCK, instrument="贵州茅台"),
-        market=FakeMarket(),
-        generator=FailingGenerator(),
-    ).run(ChatRequest(question="分析贵州茅台走势"))
-
-    assert result.status is OrchestrationStatus.FAILED
-    assert result.error_code is ErrorCode.MODEL_UNAVAILABLE
-    assert result.answer is None
+    assert price.calls == [] and search.calls == []

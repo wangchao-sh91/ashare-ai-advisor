@@ -143,7 +143,7 @@ def parse_sse(body: str) -> list[tuple[str, dict[str, object]]]:
 @pytest.mark.asyncio
 async def test_success_stream_has_ordered_progress_semantic_sections_and_terminal_event() -> None:
     orchestrator = FakeOrchestrator(answered_result())
-    app = create_app(Settings(), orchestrator=orchestrator)
+    app = create_app(Settings(_env_file=None), orchestrator=orchestrator)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -182,7 +182,7 @@ async def test_failed_orchestration_has_one_typed_terminal_error() -> None:
         message="没有足够证据",
         error_code=ErrorCode.MARKET_DATA_UNAVAILABLE,
     )
-    app = create_app(Settings(), orchestrator=FakeOrchestrator(result))
+    app = create_app(Settings(_env_file=None), orchestrator=FakeOrchestrator(result))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/chat/stream", json={"question": "分析贵州茅台"})
@@ -206,7 +206,7 @@ async def test_failed_orchestration_has_one_typed_terminal_error() -> None:
     ],
 )
 async def test_invalid_or_oversized_requests_fail_before_stream(payload: dict[str, object]) -> None:
-    app = create_app(Settings(), orchestrator=FakeOrchestrator(answered_result()))
+    app = create_app(Settings(_env_file=None), orchestrator=FakeOrchestrator(answered_result()))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/api/chat/stream", json=payload)
@@ -216,7 +216,7 @@ async def test_invalid_or_oversized_requests_fail_before_stream(payload: dict[st
 
 @pytest.mark.asyncio
 async def test_cors_allows_only_configured_origin_and_exposes_request_id() -> None:
-    app = create_app(Settings(), orchestrator=FakeOrchestrator(answered_result()))
+    app = create_app(Settings(_env_file=None), orchestrator=FakeOrchestrator(answered_result()))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         allowed = await client.options(
@@ -265,7 +265,7 @@ async def test_disconnect_cancels_orchestration_and_emits_nothing_after_accepted
 
 @pytest.mark.asyncio
 async def test_health_and_readiness_remain_available_with_chat_router() -> None:
-    app = create_app(Settings(), orchestrator=FakeOrchestrator(answered_result()))
+    app = create_app(Settings(_env_file=None), orchestrator=FakeOrchestrator(answered_result()))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         health = await client.get("/health")

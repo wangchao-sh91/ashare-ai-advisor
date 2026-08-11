@@ -1,22 +1,28 @@
-"""Deterministic bounded evidence planning over approved application operations."""
+"""Deterministic category-to-provider evidence planning."""
+
+from datetime import date, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agent.routing import IntentClassification, IntentKind
-from app.domain import Instrument, InstrumentType, MarketDataCategory
-from app.providers.akshare_allowlist import MarketOperation
-from app.providers.search_gateway import FreshnessIntent, SearchRequest
+from app.agent.routing import IntentKind, QuestionNormalization
+from app.domain import (
+    EvidenceCategory,
+    Instrument,
+    InstrumentType,
+    ProviderKind,
+    ProviderPlan,
+)
 
-MAX_MARKET_CALLS = 6
-MAX_SEARCH_CALLS = 1
+MAX_PROVIDER_CALLS = 7
 
-
-class MarketCallPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    operation: MarketOperation
-    category: MarketDataCategory
-    required: bool = True
+_SEARCH_TERMS = {
+    EvidenceCategory.FINANCIAL: "财务 报告 官方",
+    EvidenceCategory.VALUATION: "估值 市盈率 市净率 官方",
+    EvidenceCategory.OWNERSHIP: "股东 持股 公告",
+    EvidenceCategory.PLEDGE: "股份 质押 公告",
+    EvidenceCategory.CORPORATE_EVENT: "最新公告 官方",
+    EvidenceCategory.INDEX_CONTEXT: "最新情况 指数公司 权威",
+}
 
 
 class EvidencePlan(BaseModel):
@@ -24,87 +30,82 @@ class EvidencePlan(BaseModel):
 
     intent: IntentKind
     instrument: Instrument | None = None
-    market_calls: list[MarketCallPlan] = Field(default_factory=list, max_length=MAX_MARKET_CALLS)
-    search_calls: list[SearchRequest] = Field(default_factory=list, max_length=MAX_SEARCH_CALLS)
-    unsupported_categories: list[MarketDataCategory] = Field(default_factory=list)
+    calls: list[ProviderPlan] = Field(default_factory=list, max_length=MAX_PROVIDER_CALLS)
 
     @model_validator(mode="after")
-    def validate_instrument_calls(self) -> "EvidencePlan":
-        if self.market_calls and self.instrument is None:
-            raise ValueError("market calls require a resolved instrument")
-        if len({call.category for call in self.market_calls}) != len(self.market_calls):
-            raise ValueError("each market category may be planned only once")
+    def validate_unique_categories(self) -> "EvidencePlan":
+        categories = [call.category for call in self.calls]
+        if len(categories) != len(set(categories)):
+            raise ValueError("each evidence category may be planned only once")
+        if self.calls and self.instrument is None:
+            raise ValueError("provider calls require a canonical instrument")
         return self
 
+    @property
+    def market_calls(self) -> list[ProviderPlan]:
+        return [call for call in self.calls if call.provider is ProviderKind.TUSHARE]
 
-_STOCK_OPERATIONS = {
-    MarketDataCategory.PRICE: MarketOperation.STOCK_HISTORY,
-    MarketDataCategory.FINANCIAL: MarketOperation.FINANCIAL_OVERVIEW,
-    MarketDataCategory.VALUATION: MarketOperation.VALUATION_HISTORY,
-    MarketDataCategory.OWNERSHIP: MarketOperation.OWNERSHIP,
-    MarketDataCategory.PLEDGE: MarketOperation.PLEDGE,
-}
+    @property
+    def search_calls(self) -> list[ProviderPlan]:
+        return [call for call in self.calls if call.provider is ProviderKind.DOUBAO_SEARCH]
 
 
 class EvidencePlanner:
-    def build(
-        self,
-        question: str,
-        classification: IntentClassification,
-        instrument: Instrument | None,
-    ) -> EvidencePlan:
-        categories = list(classification.requested_categories)
-        calls: list[MarketCallPlan] = []
-        unsupported: list[MarketDataCategory] = []
+    def __init__(self, *, today: date | None = None, search_result_limit: int = 5) -> None:
+        self._today = today
+        self._search_result_limit = search_result_limit
 
-        if classification.intent in {
-            IntentKind.SINGLE_STOCK,
-            IntentKind.BROAD_INDEX,
-            IntentKind.MIXED,
-        }:
-            if instrument is None:
-                raise ValueError("research intent requires a resolved instrument")
-            if not categories:
-                categories = [
-                    MarketDataCategory.INDEX_PRICE
-                    if instrument.instrument_type is InstrumentType.BROAD_INDEX
-                    else MarketDataCategory.PRICE
-                ]
-            for category in categories[:MAX_MARKET_CALLS]:
-                operation = self._operation_for(instrument, category)
-                if operation is None:
-                    unsupported.append(category)
-                else:
-                    calls.append(
-                        MarketCallPlan(operation=operation, category=category, required=True)
+    def build(self, normalization: QuestionNormalization) -> EvidencePlan:
+        if normalization.intent in {IntentKind.STABLE_KNOWLEDGE, IntentKind.OUT_OF_SCOPE}:
+            return EvidencePlan(intent=normalization.intent)
+        instrument = normalization.instrument
+        if instrument is None:
+            raise ValueError("research normalization requires a canonical instrument")
+        today = self._today or date.today()
+        start = normalization.analysis_start or today - timedelta(days=370)
+        end = normalization.analysis_end or today
+        categories = list(normalization.requested_categories)
+        if not categories:
+            categories = [
+                EvidenceCategory.INDEX_CONTEXT
+                if instrument.instrument_type is InstrumentType.BROAD_INDEX
+                else EvidenceCategory.PRICE_DAILY
+            ]
+        calls: list[ProviderPlan] = []
+        for category in categories:
+            if category is EvidenceCategory.PRICE_DAILY:
+                if instrument.instrument_type is not InstrumentType.STOCK:
+                    raise ValueError("broad indexes cannot request structured daily prices")
+                calls.append(
+                    ProviderPlan(
+                        category=category,
+                        provider=ProviderKind.TUSHARE,
+                        instrument=instrument,
+                        start_date=start,
+                        end_date=end,
                     )
-
-        searches: list[SearchRequest] = []
-        if classification.time_sensitive:
-            query = " ".join(question.split())[:100]
-            searches.append(
-                SearchRequest(
+                )
+                continue
+            query = _search_query(instrument, category)
+            calls.append(
+                ProviderPlan(
+                    category=category,
+                    provider=ProviderKind.DOUBAO_SEARCH,
+                    instrument=instrument,
+                    start_date=start,
+                    end_date=end,
                     query=query,
-                    result_limit=5,
-                    freshness_intent=FreshnessIntent.MONTH,
-                    authority_intent=True,
+                    result_limit=self._search_result_limit,
                 )
             )
-        return EvidencePlan(
-            intent=classification.intent,
-            instrument=instrument,
-            market_calls=calls,
-            search_calls=searches,
-            unsupported_categories=unsupported,
-        )
+        return EvidencePlan(intent=normalization.intent, instrument=instrument, calls=calls)
 
-    @staticmethod
-    def _operation_for(
-        instrument: Instrument,
-        category: MarketDataCategory,
-    ) -> MarketOperation | None:
-        if instrument.instrument_type is InstrumentType.BROAD_INDEX:
-            if category in {MarketDataCategory.PRICE, MarketDataCategory.INDEX_PRICE}:
-                return MarketOperation.INDEX_HISTORY
-            return None
-        return _STOCK_OPERATIONS.get(category)
+
+def _search_query(instrument: Instrument, category: EvidenceCategory) -> str:
+    terms = _SEARCH_TERMS.get(category)
+    if terms is None:
+        raise ValueError("category has no approved search mapping")
+    identifier = instrument.ts_code
+    if category is EvidenceCategory.CORPORATE_EVENT:
+        identifier = instrument.code
+    return " ".join(f"{instrument.name} {identifier} {terms}".split())[:100]

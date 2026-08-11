@@ -1,6 +1,0 @@
-{
-  "records": [
-    {"数据日期": "2026-08-07", "PE(TTM)": 18.2, "PE(静)": 19.1, "市净率": 2.3, "市销率": 3.4}
-  ],
-  "expected_units": {"pe_ttm": "ratio", "pe_static": "ratio", "pb": "ratio", "ps_ttm": "ratio"}
-}

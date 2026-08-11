@@ -23,11 +23,15 @@ async def test_fake_provider_mode_becomes_ready_and_streams_without_credentials(
         )
 
     assert readiness.status_code == 200
-    assert readiness.json() == {"status": "ready", "missing": []}
+    assert readiness.json() == {
+        "status": "ready",
+        "missing": [],
+        "providers": {"tushare": "configured", "doubao_search": "usable"},
+    }
     frames = response.text.strip().split("\n\n")
     names = [frame.splitlines()[0] for frame in frames]
     assert names[0] == "event: accepted"
     assert "event: status" in names
     assert names[-1] == "event: answer-complete"
     payload = json.loads(frames[-1].splitlines()[1].removeprefix("data: "))
-    assert payload["answer"]["citations"][0]["url"] == "https://example.com/notice"
+    assert payload["answer"]["citations"][0]["url"].startswith("https://example.com/")

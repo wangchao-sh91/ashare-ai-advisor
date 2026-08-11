@@ -2,8 +2,8 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
-from langchain_core.messages import BaseMessage, HumanMessage
-from openai import APITimeoutError, RateLimitError
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from openai import APITimeoutError, BadRequestError, RateLimitError
 from pydantic import BaseModel
 
 from app.providers.model_gateway import (
@@ -21,9 +21,10 @@ class FakeRunnable:
     def __init__(self, outcomes: list[Any]) -> None:
         self.outcomes = outcomes
         self.calls = 0
+        self.inputs: list[Sequence[BaseMessage]] = []
 
     async def ainvoke(self, input: Sequence[BaseMessage]) -> Any:
-        del input
+        self.inputs.append(input)
         outcome = self.outcomes[min(self.calls, len(self.outcomes) - 1)]
         self.calls += 1
         if isinstance(outcome, BaseException):
@@ -72,12 +73,18 @@ def gateway(
 async def test_returns_valid_structured_output_with_json_mode() -> None:
     instance, runnable, client = gateway([Answer(value="ok")])
 
-    result = await instance.generate_structured([HumanMessage(content="return JSON")], Answer)
+    original = HumanMessage(content="return an object")
+    result = await instance.generate_structured([original], Answer)
 
     assert result == Answer(value="ok")
     assert runnable.calls == 1
     assert client.schema is Answer
     assert client.method == "json_mode"
+    assert isinstance(runnable.inputs[0][0], SystemMessage)
+    instruction = str(runnable.inputs[0][0].content)
+    assert "json object" in instruction
+    assert '"value"' in instruction
+    assert runnable.inputs[0][1] is original
 
 
 @pytest.mark.asyncio
@@ -123,11 +130,30 @@ async def test_returns_secret_safe_rate_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_invalid_structured_output_without_retry() -> None:
+async def test_bad_request_is_secret_safe_and_not_retried() -> None:
+    response = __import__("httpx").Response(
+        400,
+        request=__import__("httpx").Request("POST", "https://example.com"),
+    )
+    instance, runnable, _ = gateway(
+        [BadRequestError("private body", response=response, body=None)],
+        retries=2,
+    )
+
+    with pytest.raises(ModelGatewayError) as raised:
+        await instance.generate_structured([HumanMessage(content="x")], Answer)
+
+    assert raised.value.code is ModelErrorCode.UPSTREAM_ERROR
+    assert "private body" not in str(raised.value)
+    assert runnable.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_retries_invalid_structured_output_within_bound() -> None:
     instance, runnable, _ = gateway([{"wrong": "shape"}], retries=2)
 
     with pytest.raises(ModelGatewayError) as raised:
         await instance.generate_structured([HumanMessage(content="x")], Answer)
 
     assert raised.value.code is ModelErrorCode.INVALID_STRUCTURED_OUTPUT
-    assert runnable.calls == 1
+    assert runnable.calls == 3

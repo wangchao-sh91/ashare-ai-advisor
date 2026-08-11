@@ -1,5 +1,6 @@
-"""Small process-local TTL cache for provider DataFrames."""
+"""Small bounded process-local TTL/LRU cache with defensive copies."""
 
+from collections import OrderedDict
 from collections.abc import Callable, Hashable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -14,14 +15,21 @@ class _Entry[V]:
 
 
 class TTLCache[K: Hashable, V]:
-    """Thread-safe cache that returns defensive copies."""
-
-    def __init__(self, ttl_seconds: float, clock: Callable[[], float] = monotonic) -> None:
+    def __init__(
+        self,
+        ttl_seconds: float,
+        *,
+        max_entries: int = 512,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
         self._ttl_seconds = ttl_seconds
+        self._max_entries = max_entries
         self._clock = clock
-        self._entries: dict[K, _Entry[V]] = {}
+        self._entries: OrderedDict[K, _Entry[V]] = OrderedDict()
         self._lock = RLock()
 
     def get(self, key: K) -> V | None:
@@ -32,6 +40,7 @@ class TTLCache[K: Hashable, V]:
             if entry.expires_at <= self._clock():
                 self._entries.pop(key, None)
                 return None
+            self._entries.move_to_end(key)
             return deepcopy(entry.value)
 
     def set(self, key: K, value: V) -> None:
@@ -40,6 +49,9 @@ class TTLCache[K: Hashable, V]:
                 value=deepcopy(value),
                 expires_at=self._clock() + self._ttl_seconds,
             )
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
 
     def clear(self) -> None:
         with self._lock:

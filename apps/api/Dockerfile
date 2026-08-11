@@ -6,17 +6,15 @@ ENV VIRTUAL_ENV=/opt/venv \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends build-essential git \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m venv "$VIRTUAL_ENV"
+RUN python -m venv "$VIRTUAL_ENV"
 
 WORKDIR /build
 COPY pyproject.toml ./
+COPY requirements.lock ./
 COPY app ./app
 RUN python -m pip install --upgrade "pip==25.1.1" \
-    && python -m pip install . \
-    && test -x /opt/venv/bin/mcp-server-askecho-search-infinity
+    && python -m pip install --requirement requirements.lock \
+    && python -m pip install --no-deps .
 
 FROM python:3.12.11-slim-bookworm AS runtime
 

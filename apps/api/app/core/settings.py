@@ -1,4 +1,4 @@
-"""Validated application settings loaded from the environment."""
+"""Validated, secret-safe application and provider settings."""
 
 from enum import StrEnum
 from functools import lru_cache
@@ -7,17 +7,15 @@ from typing import Any
 from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DOUBAO_SEARCH_ENDPOINT = "https://open.feedcoopapi.com/search_api/web_search"
+
 
 class BindMode(StrEnum):
-    """Supported network exposure modes."""
-
     DIRECT = "direct"
     CONTAINER = "container"
 
 
 class LogLevel(StrEnum):
-    """Allowed application log levels."""
-
     DEBUG = "DEBUG"
     INFO = "INFO"
     WARNING = "WARNING"
@@ -25,21 +23,13 @@ class LogLevel(StrEnum):
     CRITICAL = "CRITICAL"
 
 
-class McpTransport(StrEnum):
-    """Approved Doubao MCP transport for the single-worker MVP."""
-
-    STDIO = "stdio"
-
-
 class ProviderMode(StrEnum):
-    """Select real providers or deterministic verification fakes."""
-
     REAL = "real"
     FAKE = "fake"
 
 
 class Settings(BaseSettings):
-    """Runtime configuration with safe defaults for local development."""
+    """Runtime configuration; provider secrets are never rendered by the app."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -64,17 +54,23 @@ class Settings(BaseSettings):
     deepseek_timeout_seconds: float = Field(default=60, gt=0, le=300)
     deepseek_max_retries: int = Field(default=2, ge=0, le=5)
 
+    tushare_token: SecretStr | None = None
+    tushare_timeout_seconds: float = Field(default=20, gt=0, le=120)
+    tushare_max_retries: int = Field(default=1, ge=0, le=3)
+    tushare_max_workers: int = Field(default=4, ge=1, le=16)
+    price_cache_ttl_seconds: int = Field(default=21600, ge=1, le=604800)
+
     doubao_search_api_key: SecretStr | None = None
-    doubao_search_access_key: SecretStr | None = None
-    doubao_search_secret_key: SecretStr | None = None
-    doubao_search_transport: McpTransport = McpTransport.STDIO
+    doubao_search_endpoint: HttpUrl = HttpUrl(DOUBAO_SEARCH_ENDPOINT)
     doubao_search_timeout_seconds: float = Field(default=20, gt=0, le=120)
     doubao_search_max_retries: int = Field(default=2, ge=0, le=5)
+    doubao_search_max_concurrency: int = Field(default=4, ge=1, le=5)
+    doubao_search_result_count: int = Field(default=5, ge=1, le=50)
+    corporate_event_cache_ttl_seconds: int = Field(default=1800, ge=1, le=86400)
+    financial_search_cache_ttl_seconds: int = Field(default=86400, ge=1, le=604800)
+    index_search_cache_ttl_seconds: int = Field(default=3600, ge=1, le=86400)
+    provider_cache_max_entries: int = Field(default=512, ge=1, le=10000)
 
-    akshare_timeout_seconds: float = Field(default=20, gt=0, le=120)
-    akshare_max_retries: int = Field(default=2, ge=0, le=5)
-    akshare_max_workers: int = Field(default=4, ge=1, le=16)
-    market_data_cache_ttl_seconds: int = Field(default=300, ge=1, le=86400)
     cors_allowed_origins: list[HttpUrl] = Field(
         default_factory=lambda: [HttpUrl("http://127.0.0.1:5173")]
     )
@@ -83,14 +79,12 @@ class Settings(BaseSettings):
         "deepseek_api_key",
         "deepseek_base_url",
         "deepseek_model",
+        "tushare_token",
         "doubao_search_api_key",
-        "doubao_search_access_key",
-        "doubao_search_secret_key",
         mode="before",
     )
     @classmethod
     def blank_optional_values_become_none(cls, value: Any) -> Any:
-        """Treat redacted empty environment variables as missing configuration."""
         if isinstance(value, str) and not value.strip():
             return None
         return value
@@ -98,13 +92,18 @@ class Settings(BaseSettings):
     @field_validator("deepseek_model", mode="after")
     @classmethod
     def normalize_model_id(cls, value: str | None) -> str | None:
-        """Reject an effectively empty wire model identifier."""
         return value.strip() if value is not None else None
+
+    @field_validator("doubao_search_endpoint", mode="after")
+    @classmethod
+    def require_official_search_endpoint(cls, value: HttpUrl) -> HttpUrl:
+        if str(value) != DOUBAO_SEARCH_ENDPOINT:
+            raise ValueError("Doubao Search endpoint must be the approved official endpoint")
+        return value
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: Any) -> Any:
-        """Accept a comma-separated environment value or a programmatic list."""
         if isinstance(value, str):
             origins = [origin.strip() for origin in value.split(",") if origin.strip()]
             if not origins:
@@ -115,7 +114,6 @@ class Settings(BaseSettings):
     @field_validator("cors_allowed_origins", mode="after")
     @classmethod
     def validate_cors_origins(cls, origins: list[HttpUrl]) -> list[HttpUrl]:
-        """Require origins without credentials, query strings, or fragments."""
         if not origins:
             raise ValueError("at least one CORS origin is required")
         for origin in origins:
@@ -127,7 +125,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_bind_mode(self) -> "Settings":
-        """Keep direct development loopback-only and container binding explicit."""
         direct_hosts = {"127.0.0.1", "localhost", "::1"}
         container_hosts = {"0.0.0.0", "::"}
         if self.api_host is None:
@@ -138,58 +135,25 @@ class Settings(BaseSettings):
             raise ValueError("container bind mode requires an all-interface API host")
         return self
 
-    @model_validator(mode="after")
-    def validate_doubao_authentication(self) -> "Settings":
-        """Accept exactly one complete official MCP authentication mode."""
-        has_api_key = self.doubao_search_api_key is not None
-        has_access_key = self.doubao_search_access_key is not None
-        has_secret_key = self.doubao_search_secret_key is not None
-        if has_access_key != has_secret_key:
-            raise ValueError("Doubao search access key and secret key must be configured together")
-        if has_api_key and has_access_key:
-            raise ValueError("Doubao search API-key and AK/SK modes are mutually exclusive")
-        return self
-
-    def doubao_search_auth_configured(self) -> bool:
-        """Return whether one complete official MCP authentication mode is configured."""
-        return self.doubao_search_api_key is not None or (
-            self.doubao_search_access_key is not None and self.doubao_search_secret_key is not None
-        )
-
-    def doubao_search_child_env(self) -> dict[str, str]:
-        """Map product-level secrets to the fixed official child environment."""
-        if self.doubao_search_api_key is not None:
-            return {
-                "ASK_ECHO_SEARCH_INFINITY_API_KEY": self.doubao_search_api_key.get_secret_value()
-            }
-        if self.doubao_search_access_key and self.doubao_search_secret_key:
-            return {
-                "VOLCENGINE_ACCESS_KEY": self.doubao_search_access_key.get_secret_value(),
-                "VOLCENGINE_SECRET_KEY": self.doubao_search_secret_key.get_secret_value(),
-            }
-        return {}
-
     def missing_required_provider_settings(self) -> tuple[str, ...]:
-        """Return missing readiness keys without exposing their values."""
         if self.provider_mode is ProviderMode.FAKE:
             return ()
         required = {
             "DEEPSEEK_API_KEY": self.deepseek_api_key,
             "DEEPSEEK_BASE_URL": self.deepseek_base_url,
             "DEEPSEEK_MODEL": self.deepseek_model,
-            "DOUBAO_SEARCH_AUTH": self.doubao_search_auth_configured() or None,
+            "TUSHARE_TOKEN": self.tushare_token,
+            "DOUBAO_SEARCH_API_KEY": self.doubao_search_api_key,
         }
         return tuple(name for name, value in required.items() if value is None)
 
     def secret_values(self) -> tuple[str, ...]:
-        """Return configured secrets for in-process log redaction."""
         return tuple(
             secret.get_secret_value()
             for secret in (
                 self.deepseek_api_key,
+                self.tushare_token,
                 self.doubao_search_api_key,
-                self.doubao_search_access_key,
-                self.doubao_search_secret_key,
             )
             if secret is not None and secret.get_secret_value()
         )
@@ -197,5 +161,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Load and cache process-wide settings."""
     return Settings()

@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.agent.routing import IntentClassification, IntentKind
+from app.agent.routing import IntentKind, QuestionNormalization
 
 
 class SafetyAction(StrEnum):
@@ -46,7 +46,7 @@ class InvestmentSafetyPolicy:
     def evaluate(
         self,
         question: str,
-        classification: IntentClassification,
+        classification: QuestionNormalization,
     ) -> SafetyDecision:
         violations: list[SafetyViolation] = []
         if classification.comparison_requested:

@@ -1,6 +1,0 @@
-{
-  "records": [
-    {"股票代码": "600001", "股东名称": "脱敏股东甲", "质押股份数量": 200000, "占总股本比例": 1.1, "公告日期": "2026-07-21", "状态": "进行中"}
-  ],
-  "expected_units": {"pledged_shares": "shares", "pledged_pct_total": "percent"}
-}

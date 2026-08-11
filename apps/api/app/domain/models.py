@@ -1,4 +1,4 @@
-"""Provider-independent domain models for grounded research answers."""
+"""Provider-independent domain models for category-grounded research."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -11,8 +11,6 @@ INVESTMENT_DISCLAIMER = "本回答仅供研究参考，不构成任何投资建�
 
 
 class DomainModel(BaseModel):
-    """Strict immutable base for values crossing application boundaries."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
@@ -27,43 +25,61 @@ class Exchange(StrEnum):
     BSE = "BSE"
 
 
-class Instrument(DomainModel):
-    """Canonical identity for a supported stock or broad index."""
+_TS_SUFFIX = {Exchange.SSE: "SH", Exchange.SZSE: "SZ", Exchange.BSE: "BJ"}
 
+
+class Instrument(DomainModel):
     name: str = Field(min_length=1, max_length=100)
     code: str = Field(pattern=r"^\d{6}$")
     exchange: Exchange
     instrument_type: InstrumentType
 
+    @model_validator(mode="after")
+    def validate_stock_exchange(self) -> Self:
+        if self.instrument_type is InstrumentType.STOCK:
+            expected = (
+                Exchange.SSE
+                if self.code.startswith("6")
+                else Exchange.BSE
+                if self.code.startswith(("4", "8"))
+                else Exchange.SZSE
+            )
+            if self.exchange is not expected:
+                raise ValueError("stock code and exchange are inconsistent")
+        return self
+
     @property
     def symbol(self) -> str:
-        """Return a stable exchange-qualified symbol."""
         return f"{self.exchange.value}:{self.code}"
 
+    @property
+    def ts_code(self) -> str:
+        return f"{self.code}.{_TS_SUFFIX[self.exchange]}"
 
-class MarketDataCategory(StrEnum):
-    PRICE = "price"
-    INDEX_PRICE = "index_price"
+
+class EvidenceCategory(StrEnum):
+    PRICE_DAILY = "price_daily"
     FINANCIAL = "financial"
     VALUATION = "valuation"
     OWNERSHIP = "ownership"
     PLEDGE = "pledge"
+    CORPORATE_EVENT = "corporate_event"
+    INDEX_CONTEXT = "index_context"
 
 
+MarketDataCategory = EvidenceCategory
 MarketValue = Decimal | int | str | date | None
 
 
 class NormalizedMarketRecord(DomainModel):
-    """Canonical market record with provider provenance kept at the edge."""
-
     id: str = Field(min_length=1, max_length=128)
     instrument: Instrument
-    category: MarketDataCategory
+    category: EvidenceCategory = EvidenceCategory.PRICE_DAILY
     observed_at: date
     values: dict[str, MarketValue] = Field(min_length=1)
     units: dict[str, str] = Field(default_factory=dict)
-    interface: str = Field(min_length=1, max_length=128)
-    upstream_source: str = Field(min_length=1, max_length=200)
+    interface: str = Field(default="pro.daily", min_length=1, max_length=128)
+    upstream_source: str = Field(default="Tushare", min_length=1, max_length=200)
     period_start: date | None = None
     period_end: date | None = None
     cutoff: datetime
@@ -88,6 +104,7 @@ class QualityFlagCode(StrEnum):
     INSUFFICIENT_SAMPLE = "insufficient_sample"
     UNIT_UNCERTAIN = "unit_uncertain"
     SOURCE_CONFLICT = "source_conflict"
+    TIMING_UNCERTAIN = "timing_uncertain"
 
 
 class QualityFlag(DomainModel):
@@ -96,7 +113,7 @@ class QualityFlag(DomainModel):
 
 
 class SourceType(StrEnum):
-    AKSHARE = "akshare"
+    TUSHARE = "tushare"
     WEB = "web"
 
 
@@ -106,12 +123,11 @@ class SourceQuality(StrEnum):
 
 
 class Citation(DomainModel):
-    """User-visible attribution for a market or web claim."""
-
     id: str = Field(min_length=1, max_length=128)
     source_type: SourceType
     title: str = Field(min_length=1, max_length=300)
     supported_claim: str = Field(min_length=1, max_length=1000)
+    category: EvidenceCategory | None = None
     source_quality: SourceQuality = SourceQuality.PRIMARY
     interface: str | None = Field(default=None, max_length=128)
     publisher: str | None = Field(default=None, max_length=200)
@@ -120,21 +136,23 @@ class Citation(DomainModel):
     snippet: str | None = Field(default=None, max_length=2000)
     published_at: datetime | None = None
     retrieved_at: datetime
+    authority_level: int | None = Field(default=None, ge=0, le=10)
+    authority_description: str | None = Field(default=None, max_length=300)
+    query: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def require_source_locator(self) -> Self:
         if self.source_type is SourceType.WEB and self.url is None:
             raise ValueError("web citations require an HTTP(S) URL")
-        if self.source_type is SourceType.AKSHARE and self.interface is None:
-            raise ValueError("AKShare citations require an interface name")
+        if self.source_type is SourceType.TUSHARE and self.interface is None:
+            raise ValueError("Tushare citations require an interface name")
         return self
 
 
 class EvidenceItem(DomainModel):
-    """A fact or metric that can be referenced during answer generation."""
-
     id: str = Field(min_length=1, max_length=128)
     kind: EvidenceKind
+    category: EvidenceCategory | None = None
     claim: str = Field(min_length=1, max_length=2000)
     value: Decimal | str | None = None
     unit: str | None = Field(default=None, max_length=50)
@@ -153,7 +171,85 @@ class EvidenceItem(DomainModel):
             raise ValueError("period_start must not be after period_end")
         if self.kind is EvidenceKind.COMPUTED_METRIC and not self.source_ids:
             raise ValueError("computed metrics require at least one input source ID")
+        if self.kind is EvidenceKind.MARKET_FACT and self.category not in {
+            None,
+            EvidenceCategory.PRICE_DAILY,
+        }:
+            raise ValueError("only daily prices may be market facts")
         return self
+
+
+class ProviderKind(StrEnum):
+    TUSHARE = "tushare"
+    DOUBAO_SEARCH = "doubao_search"
+
+
+class CategoryStatus(StrEnum):
+    SUFFICIENT = "sufficient"
+    INSUFFICIENT = "insufficient"
+    UNAVAILABLE = "unavailable"
+    INVALID = "invalid"
+    UNSUPPORTED = "unsupported"
+
+
+class InsufficiencyReason(StrEnum):
+    NO_RESULTS = "no_results"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    INVALID_SCHEMA = "invalid_schema"
+    INSUFFICIENT_SAMPLE = "insufficient_sample"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    RATE_LIMITED = "rate_limited"
+    UNSUPPORTED = "unsupported"
+    CATEGORY_MISMATCH = "category_mismatch"
+
+
+class ProviderPlan(DomainModel):
+    category: EvidenceCategory
+    provider: ProviderKind
+    required: bool = True
+    instrument: Instrument | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    query: str | None = Field(default=None, max_length=100)
+    result_limit: int = Field(default=5, ge=1, le=50)
+
+
+class CategoryOutcome(DomainModel):
+    category: EvidenceCategory
+    provider: ProviderKind
+    status: CategoryStatus
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
+    records: list[NormalizedMarketRecord] = Field(default_factory=list)
+    reason: InsufficiencyReason | None = None
+    detail: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> Self:
+        if self.status is CategoryStatus.SUFFICIENT and not (self.evidence or self.citations):
+            raise ValueError("sufficient category requires evidence or citations")
+        if self.status is not CategoryStatus.SUFFICIENT and self.reason is None:
+            raise ValueError("non-sufficient category requires a reason")
+        if self.status is not CategoryStatus.SUFFICIENT and self.records:
+            raise ValueError("non-sufficient category cannot carry market records")
+        return self
+
+
+class TushareProvenance(DomainModel):
+    interface: str = "pro.daily"
+    ts_code: str = Field(pattern=r"^\d{6}\.(SH|SZ|BJ)$")
+    period_start: date
+    period_end: date
+    cutoff: datetime
+    retrieved_at: datetime
+    units: dict[str, str]
+
+
+class WebProvenance(DomainModel):
+    query: str = Field(min_length=1, max_length=100)
+    category: EvidenceCategory
+    retrieved_at: datetime
+    result_count: int = Field(ge=0, le=50)
 
 
 class LimitationCode(StrEnum):
@@ -163,6 +259,7 @@ class LimitationCode(StrEnum):
     SEARCH_UNVERIFIED = "search_unverified"
     SOURCE_CONFLICT = "source_conflict"
     UNSUPPORTED_CATEGORY = "unsupported_category"
+    QUOTA_EXHAUSTED = "quota_exhausted"
 
 
 class Limitation(DomainModel):
@@ -180,8 +277,6 @@ class AnswerKind(StrEnum):
 
 
 class StructuredAnswer(DomainModel):
-    """Verified semantic answer returned by orchestration."""
-
     kind: AnswerKind
     summary: str = Field(min_length=1, max_length=4000)
     facts: list[EvidenceItem] = Field(default_factory=list, max_length=100)
