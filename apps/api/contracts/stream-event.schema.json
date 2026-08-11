@@ -180,8 +180,45 @@
     },
     "Citation": {
       "additionalProperties": false,
-      "description": "User-visible attribution for a market or web claim.",
       "properties": {
+        "authority_description": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authority Description"
+        },
+        "authority_level": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authority Level"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "domain": {
           "anyOf": [
             {
@@ -239,6 +276,19 @@
           ],
           "default": null,
           "title": "Publisher"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
         },
         "retrieved_at": {
           "format": "date-time",
@@ -403,10 +453,33 @@
       "title": "ErrorEvent",
       "type": "object"
     },
+    "EvidenceCategory": {
+      "enum": [
+        "price_daily",
+        "financial",
+        "valuation",
+        "ownership",
+        "pledge",
+        "corporate_event",
+        "index_context"
+      ],
+      "title": "EvidenceCategory",
+      "type": "string"
+    },
     "EvidenceItem": {
       "additionalProperties": false,
-      "description": "A fact or metric that can be referenced during answer generation.",
       "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "claim": {
           "maxLength": 2000,
           "minLength": 1,
@@ -567,7 +640,6 @@
     },
     "Instrument": {
       "additionalProperties": false,
-      "description": "Canonical identity for a supported stock or broad index.",
       "properties": {
         "code": {
           "pattern": "^\\d{6}$",
@@ -644,7 +716,8 @@
         "partial_data",
         "search_unverified",
         "source_conflict",
-        "unsupported_category"
+        "unsupported_category",
+        "quota_exhausted"
       ],
       "title": "LimitationCode",
       "type": "string"
@@ -675,7 +748,8 @@
         "partial_coverage",
         "insufficient_sample",
         "unit_uncertain",
-        "source_conflict"
+        "source_conflict",
+        "timing_uncertain"
       ],
       "title": "QualityFlagCode",
       "type": "string"
@@ -690,7 +764,7 @@
     },
     "SourceType": {
       "enum": [
-        "akshare",
+        "tushare",
         "web"
       ],
       "title": "SourceType",
@@ -749,7 +823,6 @@
     },
     "StructuredAnswer": {
       "additionalProperties": false,
-      "description": "Verified semantic answer returned by orchestration.",
       "properties": {
         "analysis": {
           "items": {

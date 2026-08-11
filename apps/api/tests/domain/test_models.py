@@ -1,25 +1,28 @@
 from datetime import UTC, date, datetime
-from decimal import Decimal
 
 import pytest
 from pydantic import HttpUrl, ValidationError
 
 from app.domain import (
-    AnswerKind,
+    CategoryOutcome,
+    CategoryStatus,
     Citation,
+    EvidenceCategory,
     EvidenceItem,
     EvidenceKind,
     Exchange,
     Instrument,
     InstrumentType,
-    MarketDataCategory,
-    NormalizedMarketRecord,
+    InsufficiencyReason,
+    ProviderKind,
+    ProviderPlan,
     SourceType,
-    StructuredAnswer,
+    TushareProvenance,
+    WebProvenance,
 )
 
 NOW = datetime(2026, 8, 7, tzinfo=UTC)
-INSTRUMENT = Instrument(
+STOCK = Instrument(
     name="贵州茅台",
     code="600519",
     exchange=Exchange.SSE,
@@ -27,85 +30,99 @@ INSTRUMENT = Instrument(
 )
 
 
-def test_instrument_has_exchange_qualified_symbol() -> None:
-    assert INSTRUMENT.symbol == "SSE:600519"
+def test_instrument_produces_canonical_tushare_code_and_validates_exchange() -> None:
+    assert STOCK.ts_code == "600519.SH"
+    with pytest.raises(ValidationError):
+        Instrument(
+            name="贵州茅台",
+            code="600519",
+            exchange=Exchange.SZSE,
+            instrument_type=InstrumentType.STOCK,
+        )
 
 
-def test_normalized_record_serializes_canonical_values() -> None:
-    record = NormalizedMarketRecord(
-        id="price-1",
-        instrument=INSTRUMENT,
-        category=MarketDataCategory.PRICE,
-        observed_at=date(2026, 8, 6),
-        values={"close": Decimal("1420.50")},
-        units={"close": "CNY/share"},
-        interface="stock_zh_a_hist",
-        upstream_source="Eastmoney via AKShare",
-        cutoff=NOW,
+def test_category_plan_outcome_and_provenance_serialize() -> None:
+    plan = ProviderPlan(
+        category=EvidenceCategory.PRICE_DAILY,
+        provider=ProviderKind.TUSHARE,
+        instrument=STOCK,
+        start_date=date(2026, 8, 3),
+        end_date=date(2026, 8, 7),
+    )
+    evidence = EvidenceItem(
+        id="price:1",
+        kind=EvidenceKind.MARKET_FACT,
+        category=EvidenceCategory.PRICE_DAILY,
+        claim="收盘价",
+        source_ids=["daily:1"],
         retrieved_at=NOW,
     )
+    outcome = CategoryOutcome(
+        category=EvidenceCategory.PRICE_DAILY,
+        provider=ProviderKind.TUSHARE,
+        status=CategoryStatus.SUFFICIENT,
+        evidence=[evidence],
+    )
+    assert plan.model_dump(mode="json")["provider"] == "tushare"
+    assert outcome.model_dump(mode="json")["status"] == "sufficient"
+    provenance = TushareProvenance(
+        ts_code="600519.SH",
+        period_start=date(2026, 8, 3),
+        period_end=date(2026, 8, 7),
+        cutoff=NOW,
+        retrieved_at=NOW,
+        units={"vol": "shares", "amount": "CNY"},
+    )
+    web = WebProvenance(
+        query="贵州茅台 公告",
+        category=EvidenceCategory.CORPORATE_EVENT,
+        retrieved_at=NOW,
+        result_count=1,
+    )
+    assert provenance.interface == "pro.daily"
+    assert web.result_count == 1
 
-    payload = record.model_dump(mode="json")
-    assert payload["instrument"]["code"] == "600519"
-    assert payload["values"]["close"] == "1420.50"
 
-
-def test_invalid_record_period_is_rejected() -> None:
+def test_non_sufficient_outcome_requires_reason() -> None:
     with pytest.raises(ValidationError):
-        NormalizedMarketRecord(
-            id="bad-period",
-            instrument=INSTRUMENT,
-            category=MarketDataCategory.FINANCIAL,
-            observed_at=date(2026, 6, 30),
-            values={"revenue": 1},
-            interface="financial_abstract",
-            upstream_source="provider",
-            period_start=date(2026, 7, 1),
-            period_end=date(2026, 6, 30),
-            cutoff=NOW,
-            retrieved_at=NOW,
+        CategoryOutcome(
+            category=EvidenceCategory.VALUATION,
+            provider=ProviderKind.DOUBAO_SEARCH,
+            status=CategoryStatus.INSUFFICIENT,
         )
+    valid = CategoryOutcome(
+        category=EvidenceCategory.VALUATION,
+        provider=ProviderKind.DOUBAO_SEARCH,
+        status=CategoryStatus.INSUFFICIENT,
+        reason=InsufficiencyReason.NO_RESULTS,
+    )
+    assert valid.reason is InsufficiencyReason.NO_RESULTS
 
 
-def test_computed_metric_requires_source_ids() -> None:
-    with pytest.raises(ValidationError):
-        EvidenceItem(
-            id="return-1",
-            kind=EvidenceKind.COMPUTED_METRIC,
-            claim="区间收益率",
-            value=Decimal("0.1"),
-            retrieved_at=NOW,
-        )
-
-
-def test_citation_enforces_provider_locator() -> None:
+def test_source_boundaries_are_enforced() -> None:
     with pytest.raises(ValidationError):
         Citation(
-            id="web-1",
+            id="web:1",
             source_type=SourceType.WEB,
             title="公告",
-            supported_claim="公司发布公告",
+            supported_claim="公告事实",
             retrieved_at=NOW,
         )
-
     citation = Citation(
-        id="web-1",
+        id="web:1",
         source_type=SourceType.WEB,
         title="公告",
-        supported_claim="公司发布公告",
+        supported_claim="公告事实",
+        category=EvidenceCategory.CORPORATE_EVENT,
         url=HttpUrl("https://example.com/notice"),
         retrieved_at=NOW,
     )
-    assert citation.url is not None
-
-
-def test_structured_knowledge_answer_allows_research_sections_to_be_empty() -> None:
-    answer = StructuredAnswer(
-        kind=AnswerKind.KNOWLEDGE,
-        summary="市盈率是估值指标。",
-        answered_at=NOW,
-    )
-
-    assert answer.facts == []
-    assert answer.citations == []
-    assert "不构成任何投资建议" in answer.disclaimer
+    assert citation.source_type is SourceType.WEB
+    with pytest.raises(ValidationError):
+        EvidenceItem(
+            id="bad",
+            kind=EvidenceKind.MARKET_FACT,
+            category=EvidenceCategory.VALUATION,
+            claim="搜索估值",
+            retrieved_at=NOW,
+        )

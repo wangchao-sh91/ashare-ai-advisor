@@ -1,0 +1,37 @@
+{
+  "provider": "tushare",
+  "sdk_version": "1.4.29",
+  "interface": "pro.daily",
+  "raw_units": {
+    "vol": "hands",
+    "amount": "thousand_CNY"
+  },
+  "rows": [
+    {
+      "ts_code": "600519.SH",
+      "trade_date": "20260807",
+      "open": 1410.0,
+      "high": 1425.0,
+      "low": 1402.0,
+      "close": 1420.0,
+      "pre_close": 1408.0,
+      "change": 12.0,
+      "pct_chg": 0.8523,
+      "vol": 12345.67,
+      "amount": 1743210.5
+    },
+    {
+      "ts_code": "600519.SH",
+      "trade_date": "20260806",
+      "open": 1398.0,
+      "high": 1412.0,
+      "low": 1390.0,
+      "close": 1408.0,
+      "pre_close": 1400.0,
+      "change": 8.0,
+      "pct_chg": 0.5714,
+      "vol": 10000.0,
+      "amount": 1400000.0
+    }
+  ]
+}

@@ -47,3 +47,14 @@ def test_conversation_clearing_does_not_affect_provider_cache() -> None:
     assert conversation_messages == []
     assert cache.get("stock_history:600519") == "cached market data"
     assert len(cache) == 1
+
+
+def test_cache_evicts_least_recently_used_entry() -> None:
+    cache: TTLCache[str, str] = TTLCache(10, max_entries=2)
+    cache.set("a", "A")
+    cache.set("b", "B")
+    assert cache.get("a") == "A"
+    cache.set("c", "C")
+    assert cache.get("b") is None
+    assert cache.get("a") == "A"
+    assert cache.get("c") == "C"

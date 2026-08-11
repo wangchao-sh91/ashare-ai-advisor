@@ -1,27 +1,29 @@
 import json
 from pathlib import Path
 
-from mcp.types import CallToolResult
-
-from app.providers.search_gateway import DoubaoSearchGateway, SearchRequest
-
-FIXTURE = Path(__file__).parents[1] / "fixtures" / "doubao" / "web_search_call_tool_result.json"
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "doubao"
 
 
-class FixtureCaller:
-    async def call_web_search(self, arguments: dict[str, object]) -> CallToolResult:
-        assert arguments["SearchType"] == "web"
-        return CallToolResult(
-            content=[],
-            structuredContent=json.loads(FIXTURE.read_text(encoding="utf-8")),
-        )
+def test_redacted_live_success_contract_has_required_metadata() -> None:
+    payload = json.loads((FIXTURES / "search_success.json").read_text())
+    result = payload["Result"]["WebResults"][0]
+    assert {
+        "Id",
+        "Title",
+        "SiteName",
+        "Url",
+        "Snippet",
+        "Summary",
+        "PublishTime",
+        "RankScore",
+        "AuthInfoDes",
+        "AuthInfoLevel",
+    } <= set(result)
 
 
-async def test_sanitized_call_tool_result_matches_normalizer_contract() -> None:
-    results = await DoubaoSearchGateway(FixtureCaller()).search(
-        SearchRequest(query="sanitized contract query")
-    )
-
-    assert len(results) == 1
-    assert results[0].citation.publisher == "中国证监会"
-    assert results[0].relevance_score == 0.98
+def test_redacted_error_contracts_cover_quota_and_rate_limit() -> None:
+    codes = {
+        json.loads((FIXTURES / name).read_text())["ResponseMetadata"]["Error"]["Code"]
+        for name in ("search_quota_error.json", "search_rate_limit_error.json")
+    }
+    assert codes == {"10406", "700429"}

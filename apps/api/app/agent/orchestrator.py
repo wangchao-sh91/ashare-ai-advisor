@@ -1,22 +1,24 @@
-"""Bounded, typed orchestration for one stateless research request."""
+"""Bounded category-grounded orchestration for one stateless request."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.agent.entity_resolution import ContextualEntityResolver, EntityResolution, EntityStatus
+from app.agent.entity_resolution import EntityResolution, EntityStatus, entity_from_normalization
 from app.agent.execution import ConstrainedToolExecutor, ToolExecutionResult
 from app.agent.generation import AnswerGenerationError, AnswerGenerator
 from app.agent.planning import EvidencePlan, EvidencePlanner
-from app.agent.routing import IntentClassification, IntentClassifier
+from app.agent.routing import QuestionNormalization, QuestionNormalizer
 from app.agent.safety import InvestmentSafetyPolicy, SafetyAction, SafetyDecision
-from app.agent.verification import AnswerVerificationError, AnswerVerifier
 from app.api.chat_models import ChatRequest
 from app.domain import ErrorCode, StructuredAnswer
 from app.providers.model_gateway import ModelErrorCode, ModelGatewayError
+
+logger = logging.getLogger(__name__)
 
 
 class OrchestrationStatus(StrEnum):
@@ -45,7 +47,7 @@ class OrchestrationResult(BaseModel):
     answer: StructuredAnswer | None = None
     message: str | None = None
     error_code: ErrorCode | None = None
-    classification: IntentClassification | None = None
+    classification: QuestionNormalization | None = None
     entity: EntityResolution | None = None
     safety: SafetyDecision | None = None
     plan: EvidencePlan | None = None
@@ -57,33 +59,28 @@ class OrchestrationResult(BaseModel):
             raise ValueError("answered result requires an answer")
         if self.status is not OrchestrationStatus.ANSWERED and not self.message:
             raise ValueError("non-answer result requires a message")
-        if self.status in {OrchestrationStatus.REFUSED, OrchestrationStatus.FAILED} and not (
-            self.error_code
+        if (
+            self.status in {OrchestrationStatus.REFUSED, OrchestrationStatus.FAILED}
+            and not self.error_code
         ):
             raise ValueError("refused or failed result requires an error code")
         return self
 
 
 class ControlledOrchestrator:
-    """Application-owned workflow; no model can discover or select tools."""
-
     def __init__(
         self,
         *,
-        classifier: IntentClassifier,
-        entity_resolver: ContextualEntityResolver,
+        normalizer: QuestionNormalizer,
         planner: EvidencePlanner,
         executor: ConstrainedToolExecutor,
         generator: AnswerGenerator,
-        verifier: AnswerVerifier | None = None,
         safety_policy: InvestmentSafetyPolicy | None = None,
     ) -> None:
-        self._classifier = classifier
-        self._entity_resolver = entity_resolver
+        self._normalizer = normalizer
         self._planner = planner
         self._executor = executor
         self._generator = generator
-        self._verifier = verifier or AnswerVerifier()
         self._safety = safety_policy or InvestmentSafetyPolicy()
 
     async def run(
@@ -93,37 +90,29 @@ class ControlledOrchestrator:
     ) -> OrchestrationResult:
         await _report(progress, OrchestrationStage.ROUTING)
         try:
-            classification = await self._classifier.classify(request.question, request.messages)
+            normalization = await self._normalizer.normalize(request.question, request.messages)
         except ModelGatewayError as exc:
             return self._model_failure(exc)
-
-        safety = self._safety.evaluate(request.question, classification)
+        safety = self._safety.evaluate(request.question, normalization)
         if safety.action is SafetyAction.REFUSE:
             return OrchestrationResult(
                 status=OrchestrationStatus.REFUSED,
                 message=safety.message,
                 error_code=ErrorCode.UNSUPPORTED_SCOPE,
-                classification=classification,
+                classification=normalization,
                 safety=safety,
             )
-
-        entity = self._entity_resolver.resolve(
-            request.question,
-            classification,
-            request.messages,
-        )
+        entity = entity_from_normalization(normalization)
         if entity.status is EntityStatus.CLARIFICATION_REQUIRED:
             return OrchestrationResult(
                 status=OrchestrationStatus.CLARIFICATION_REQUIRED,
                 message=entity.clarification,
                 error_code=ErrorCode.AMBIGUOUS_INSTRUMENT,
-                classification=classification,
+                classification=normalization,
                 entity=entity,
                 safety=safety,
             )
-
-        effective_question = safety.safe_question or request.question
-        plan = self._planner.build(effective_question, classification, entity.instrument)
+        plan = self._planner.build(normalization)
         if plan.market_calls:
             await _report(progress, OrchestrationStage.MARKET_DATA)
         if plan.search_calls:
@@ -136,37 +125,36 @@ class ControlledOrchestrator:
                 status=OrchestrationStatus.FAILED,
                 message="没有足够的已验证证据回答该问题。",
                 error_code=execution.terminal_error or ErrorCode.MARKET_DATA_UNAVAILABLE,
-                classification=classification,
+                classification=normalization,
                 entity=entity,
                 safety=safety,
                 plan=plan,
                 execution=execution,
             )
-
+        effective_question = (
+            safety.safe_question
+            if safety.action is SafetyAction.REFRAME and safety.safe_question
+            else normalization.rewritten_question
+        )
         try:
             await _report(progress, OrchestrationStage.GENERATION)
-            answer = await self._generator.generate(
-                effective_question,
-                classification,
-                execution,
-            )
-            await _report(progress, OrchestrationStage.VERIFICATION)
-            verified = self._verifier.verify(answer, classification, execution)
+            answer = await self._generator.generate(effective_question, normalization, execution)
         except ModelGatewayError as exc:
             return self._model_failure(
                 exc,
-                classification=classification,
+                classification=normalization,
                 entity=entity,
                 safety=safety,
                 plan=plan,
                 execution=execution,
             )
-        except (AnswerGenerationError, AnswerVerificationError):
+        except AnswerGenerationError:
+            logger.warning("answer_generation_evidence_allowlist_failed")
             return OrchestrationResult(
                 status=OrchestrationStatus.FAILED,
-                message="生成结果未通过证据与安全验证。",
+                message="模型返回了无法解析的证据引用，请重新尝试。",
                 error_code=ErrorCode.VALIDATION_FAILED,
-                classification=classification,
+                classification=normalization,
                 entity=entity,
                 safety=safety,
                 plan=plan,
@@ -174,8 +162,8 @@ class ControlledOrchestrator:
             )
         return OrchestrationResult(
             status=OrchestrationStatus.ANSWERED,
-            answer=verified,
-            classification=classification,
+            answer=answer,
+            classification=normalization,
             entity=entity,
             safety=safety,
             plan=plan,
@@ -186,7 +174,7 @@ class ControlledOrchestrator:
     def _model_failure(
         error: ModelGatewayError,
         *,
-        classification: IntentClassification | None = None,
+        classification: QuestionNormalization | None = None,
         entity: EntityResolution | None = None,
         safety: SafetyDecision | None = None,
         plan: EvidencePlan | None = None,
@@ -209,9 +197,6 @@ class ControlledOrchestrator:
         )
 
 
-async def _report(
-    callback: ProgressCallback | None,
-    stage: OrchestrationStage,
-) -> None:
+async def _report(callback: ProgressCallback | None, stage: OrchestrationStage) -> None:
     if callback is not None:
         await callback(stage)

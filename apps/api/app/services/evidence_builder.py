@@ -31,6 +31,7 @@ def market_fact_to_evidence(
     return EvidenceItem(
         id=f"evidence:{record.id}:{field_name}",
         kind=EvidenceKind.MARKET_FACT,
+        category=record.category,
         claim=claim,
         value=_evidence_value(record.values[field_name]),
         unit=record.units.get(field_name),
@@ -59,6 +60,7 @@ def metric_to_evidence(
     return EvidenceItem(
         id=f"metric:{metric.metric}:{instrument.symbol}:{metric.period_end.isoformat()}",
         kind=EvidenceKind.COMPUTED_METRIC,
+        category=source_records[0].category if source_records else None,
         claim=claim,
         value=metric.value,
         unit=metric.unit,

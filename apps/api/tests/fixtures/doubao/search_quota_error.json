@@ -1,0 +1,8 @@
+{
+  "ResponseMetadata": {
+    "Error": {
+      "Code": "10406",
+      "Message": "redacted quota exhausted"
+    }
+  }
+}

@@ -31,7 +31,7 @@ def observation(day: int, close: Decimal | int, volume: int) -> NormalizedMarket
     return NormalizedMarketRecord(
         id=f"price:{day}",
         instrument=STOCK,
-        category=MarketDataCategory.PRICE,
+        category=MarketDataCategory.PRICE_DAILY,
         observed_at=observed_at,
         values={"close": close, "volume": volume},
         units={"close": "CNY", "volume": "shares"},

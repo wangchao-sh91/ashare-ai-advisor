@@ -1,7 +1,0 @@
-{
-  "records": [
-    {"code": "600001", "name": "沪市示例"},
-    {"code": "000001", "name": "深市示例"}
-  ],
-  "expected_units": {}
-}

@@ -1,0 +1,23 @@
+{
+  "ResponseMetadata": {
+    "RequestId": "redacted-live-contract"
+  },
+  "Result": {
+    "LogId": "redacted",
+    "ResultCount": 1,
+    "WebResults": [
+      {
+        "Id": "result-1",
+        "Title": "贵州茅台公司公告",
+        "SiteName": "上海证券交易所",
+        "Url": "https://www.sse.com.cn/example/notice",
+        "Snippet": "贵州茅台发布公司公告。",
+        "Summary": "贵州茅台（600519.SH）发布公司公告。",
+        "PublishTime": "2026-08-07T10:00:00+08:00",
+        "RankScore": 0.98,
+        "AuthInfoDes": "权威来源",
+        "AuthInfoLevel": 1
+      }
+    ]
+  }
+}

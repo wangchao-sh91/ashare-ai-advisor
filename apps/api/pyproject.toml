@@ -8,21 +8,19 @@ version = "0.1.0"
 description = "FastAPI backend for the A-share AI research advisor."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "akshare==1.18.82",
   "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
   "langchain>=0.3,<1",
   "langchain-openai>=0.3,<1",
-  "mcp>=1.9.4,<2",
-  "mcp-server-askecho-search-infinity @ git+https://github.com/volcengine/mcp-server.git@2ead744c290e3cb87295bda6504a5a329c10f4fa#subdirectory=server/mcp_server_askecho_search_infinity",
   "openai>=1.109,<3",
   "pydantic-settings>=2.10,<3",
+  "tushare==1.4.29",
   "uvicorn[standard]>=0.35,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
   "detect-secrets>=1.5,<2",
-  "httpx>=0.28,<1",
   "mypy>=1.17,<2",
   "pandas-stubs>=2.2,<4",
   "pre-commit>=4.3,<5",
@@ -50,9 +48,10 @@ branch = true
 python_version = "3.12"
 strict = true
 packages = ["app"]
+plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["akshare", "akshare.*"]
+module = ["tushare", "tushare.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

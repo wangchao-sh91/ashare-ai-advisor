@@ -1,7 +1,14 @@
+from datetime import date
+
 from app.agent.planning import EvidencePlanner
-from app.agent.routing import IntentClassification, IntentKind
-from app.domain import Exchange, Instrument, InstrumentType, MarketDataCategory
-from app.providers.akshare_allowlist import MarketOperation
+from app.agent.routing import IntentKind, QuestionNormalization
+from app.domain import (
+    EvidenceCategory,
+    Exchange,
+    Instrument,
+    InstrumentType,
+    ProviderKind,
+)
 
 STOCK = Instrument(
     name="贵州茅台",
@@ -15,66 +22,66 @@ INDEX = Instrument(
     exchange=Exchange.SSE,
     instrument_type=InstrumentType.BROAD_INDEX,
 )
+PLANNER = EvidencePlanner(today=date(2026, 8, 10), search_result_limit=3)
 
 
-def classification(
-    intent: IntentKind,
+def normalized(
     *,
-    categories: list[MarketDataCategory] | None = None,
-    current: bool = False,
-) -> IntentClassification:
-    return IntentClassification(
+    intent: IntentKind,
+    instrument: Instrument | None = None,
+    categories: list[EvidenceCategory] | None = None,
+) -> QuestionNormalization:
+    return QuestionNormalization(
+        rewritten_question="规范问题",
         intent=intent,
+        instrument=instrument,
         requested_categories=categories or [],
-        time_sensitive=current,
         rationale="test",
     )
 
 
-def test_stable_knowledge_has_no_mandatory_tools() -> None:
-    plan = EvidencePlanner().build(
-        "什么是市盈率？",
-        classification(IntentKind.STABLE_KNOWLEDGE),
-        None,
+def test_stable_knowledge_has_no_provider_calls() -> None:
+    assert PLANNER.build(normalized(intent=IntentKind.STABLE_KNOWLEDGE)).calls == []
+
+
+def test_stock_price_routes_only_to_tushare() -> None:
+    plan = PLANNER.build(normalized(intent=IntentKind.SINGLE_STOCK, instrument=STOCK))
+    assert len(plan.calls) == 1
+    assert plan.calls[0].category is EvidenceCategory.PRICE_DAILY
+    assert plan.calls[0].provider is ProviderKind.TUSHARE
+    assert plan.calls[0].query is None
+
+
+def test_stock_nonprice_and_combined_categories_route_to_fixed_search_queries() -> None:
+    plan = PLANNER.build(
+        normalized(
+            intent=IntentKind.SINGLE_STOCK,
+            instrument=STOCK,
+            categories=[
+                EvidenceCategory.PRICE_DAILY,
+                EvidenceCategory.VALUATION,
+                EvidenceCategory.CORPORATE_EVENT,
+            ],
+        )
+    )
+    assert [call.provider for call in plan.calls] == [
+        ProviderKind.TUSHARE,
+        ProviderKind.DOUBAO_SEARCH,
+        ProviderKind.DOUBAO_SEARCH,
+    ]
+    assert all("贵州茅台" in (call.query or "") for call in plan.search_calls)
+    queries = {call.category: call.query or "" for call in plan.search_calls}
+    assert "600519.SH" in queries[EvidenceCategory.VALUATION]
+    assert "600519 最新公告 官方" in queries[EvidenceCategory.CORPORATE_EVENT]
+
+
+def test_broad_index_is_search_only() -> None:
+    plan = PLANNER.build(
+        normalized(
+            intent=IntentKind.BROAD_INDEX,
+            instrument=INDEX,
+            categories=[EvidenceCategory.INDEX_CONTEXT],
+        )
     )
     assert plan.market_calls == []
-    assert plan.search_calls == []
-
-
-def test_stock_categories_map_only_to_approved_operations() -> None:
-    plan = EvidencePlanner().build(
-        "分析贵州茅台走势和估值",
-        classification(
-            IntentKind.SINGLE_STOCK,
-            categories=[MarketDataCategory.PRICE, MarketDataCategory.VALUATION],
-        ),
-        STOCK,
-    )
-    assert [call.operation for call in plan.market_calls] == [
-        MarketOperation.STOCK_HISTORY,
-        MarketOperation.VALUATION_HISTORY,
-    ]
-
-
-def test_index_uses_index_history_and_rejects_company_categories() -> None:
-    plan = EvidencePlanner().build(
-        "沪深300走势和股东情况",
-        classification(
-            IntentKind.BROAD_INDEX,
-            categories=[MarketDataCategory.PRICE, MarketDataCategory.OWNERSHIP],
-        ),
-        INDEX,
-    )
-    assert [call.operation for call in plan.market_calls] == [MarketOperation.INDEX_HISTORY]
-    assert plan.unsupported_categories == [MarketDataCategory.OWNERSHIP]
-
-
-def test_time_sensitive_claim_gets_one_bounded_search() -> None:
-    plan = EvidencePlanner().build(
-        "贵州茅台最近有什么公告？" * 20,
-        classification(IntentKind.SINGLE_STOCK, current=True),
-        STOCK,
-    )
-    assert len(plan.search_calls) == 1
-    assert len(plan.search_calls[0].query) <= 100
-    assert plan.search_calls[0].authority_intent
+    assert plan.search_calls[0].category is EvidenceCategory.INDEX_CONTEXT

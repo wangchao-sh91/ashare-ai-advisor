@@ -1,4 +1,4 @@
-"""Opt-in, secret-safe live checks for each external provider."""
+"""Opt-in, bounded and secret-safe checks for all external providers."""
 
 from __future__ import annotations
 
@@ -10,30 +10,27 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from app.core.settings import Settings
-from app.providers.akshare_allowlist import MarketOperation
-from app.providers.akshare_gateway import AKShareGateway
-from app.providers.doubao_mcp import DoubaoMcpRuntime, StdioDoubaoConnector
+from app.domain import EvidenceCategory
 from app.providers.model_gateway import DeepSeekModelGateway
 from app.providers.search_gateway import DoubaoSearchGateway, SearchRequest
+from app.providers.tushare_gateway import TushareGateway
 
 
 class SmokeOutput(BaseModel):
     ok: bool
 
 
-async def _akshare(settings: Settings) -> str:
-    gateway = AKShareGateway(
-        timeout_seconds=settings.akshare_timeout_seconds,
-        max_retries=0,
-        max_workers=1,
+async def _tushare(settings: Settings) -> str:
+    records = await TushareGateway.from_settings(settings).daily(
+        ts_code="600519.SH",
+        start_date="20260803",
+        end_date="20260807",
     )
-    frame = await gateway.fetch(MarketOperation.STOCK_CATALOG)
-    return f"received {len(frame)} catalog rows"
+    return f"received {len(records)} validated daily rows"
 
 
 async def _deepseek(settings: Settings) -> str:
-    model = DeepSeekModelGateway.from_settings(settings)
-    result = await model.generate_structured(
+    result = await DeepSeekModelGateway.from_settings(settings).generate_structured(
         [HumanMessage(content='Return JSON exactly matching {"ok": true}.')],
         SmokeOutput,
     )
@@ -41,19 +38,20 @@ async def _deepseek(settings: Settings) -> str:
 
 
 async def _doubao(settings: Settings) -> str:
-    runtime = DoubaoMcpRuntime(
-        connector=StdioDoubaoConnector(settings.doubao_search_child_env()),
-        timeout_seconds=settings.doubao_search_timeout_seconds,
-        max_retries=0,
-    )
+    gateway = DoubaoSearchGateway.from_settings(settings)
     try:
-        await runtime.start()
-        results = await DoubaoSearchGateway(runtime).search(
-            SearchRequest(query="上海证券交易所 最新公告", result_limit=1)
+        results = await gateway.search(
+            SearchRequest(
+                query="沪深300 指数 最新情况",
+                category=EvidenceCategory.INDEX_CONTEXT,
+                result_limit=1,
+            )
         )
-        return f"MCP initialized and search returned {len(results)} normalized result(s)"
+        if not results:
+            raise RuntimeError("no citable search result")
+        return f"HTTPS search returned {len(results)} normalized result(s)"
     finally:
-        await runtime.stop()
+        await gateway.aclose()
 
 
 async def _run_one(
@@ -82,20 +80,19 @@ async def main() -> int:
         return 0
     settings = Settings()
     strict = os.getenv("LIVE_SMOKE_STRICT") == "1"
-    model_configured = all(
-        (settings.deepseek_api_key, settings.deepseek_base_url, settings.deepseek_model)
-    )
     outcomes = [
-        await _run_one("AKShare", True, lambda: _akshare(settings), strict=strict),
+        await _run_one(
+            "Tushare", settings.tushare_token is not None, lambda: _tushare(settings), strict=strict
+        ),
         await _run_one(
             "DeepSeek",
-            model_configured,
+            all((settings.deepseek_api_key, settings.deepseek_base_url, settings.deepseek_model)),
             lambda: _deepseek(settings),
             strict=strict,
         ),
         await _run_one(
-            "Doubao search",
-            settings.doubao_search_auth_configured(),
+            "Doubao Search API",
+            settings.doubao_search_api_key is not None,
             lambda: _doubao(settings),
             strict=strict,
         ),

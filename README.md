@@ -20,9 +20,9 @@ make dev
 `http://127.0.0.1:8000`。开发服务器会把浏览器发往 `/api` 的请求代理到 API；
 `make dev-api` 和 `make dev-web` 可分别启动服务。
 
-真实运行必须在 `apps/api/.env` 中配置 DeepSeek 和豆包搜索凭据。后端启动时会
-初始化官方豆包 MCP 子进程并加载 AKShare 股票目录；`/ready` 返回 200 后才表示问答
-链路已就绪。
+真实运行必须在 `apps/api/.env` 中配置 DeepSeek、Tushare 和豆包搜索 API 凭据。
+Tushare 免费版只提供单只 A 股日线；财务、估值、股权、公告和宽基指数背景由豆包
+Search Custom HTTPS API 搜索支撑。`/ready` 返回 200 后才表示问答链路已就绪。
 
 ## Docker Compose
 
@@ -39,9 +39,9 @@ Compose 网络中可访问。完整部署步骤见 [本地部署指南](docs/dep
 
 - `make check`：后端 lint/格式/Mypy、前端 lint/格式/TypeScript 和密钥扫描
 - `make test`：全部后端及前端测试
-- `make compose-integration`：无真实凭据的干净镜像、MCP 生命周期、代理流式和验收场景
+- `make compose-integration`：无真实凭据的干净镜像、Provider 就绪、代理流式和验收场景
 - `make smoke-doubao-search`：调用一次豆包搜索并打印规范化后的检索结果（至少允许等待 60 秒）
-- `make smoke-live`：明确选择后运行 AKShare、DeepSeek、豆包搜索真实冒烟检查
+- `make smoke-live`：明确选择后运行 Tushare、DeepSeek、豆包搜索真实冒烟检查
 - `make format`：格式化前后端代码
 - `make secrets`：扫描疑似密钥
 

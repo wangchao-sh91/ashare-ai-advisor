@@ -37,7 +37,7 @@ def test_structured_log_contains_operational_metadata_and_correlation_id() -> No
             "provider_completed",
             stage="market_data",
             duration_ms=12.5,
-            provider="akshare",
+            provider="tushare",
             operation="daily_history",
             evidence_count=20,
         )
